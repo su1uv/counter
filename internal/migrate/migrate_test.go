@@ -53,7 +53,9 @@ func TestRunLifecycle(t *testing.T) {
 		{"down", "00001_schema_probe.sql", false, true},
 		{"up", "00001_schema_probe.sql", true, true},
 	}
-	t.Cleanup(func() { _ = Run(ctx, db, migrationsDir, "down", &bytes.Buffer{}) })
+	reset := func() { _ = Run(ctx, db, migrationsDir, "down", &bytes.Buffer{}) }
+	reset()
+	t.Cleanup(reset)
 	for _, s := range steps {
 		out.Reset()
 		if err := Run(ctx, db, migrationsDir, s.command, &out); err != nil {

@@ -28,6 +28,8 @@ func TestQueriesAgainstMigratedSchema(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	t.Cleanup(func() { _ = migrate.Run(ctx, db, "../../db/migrations", "down", &bytes.Buffer{}) })
+
 	q := store.New(db)
 	if got, err := q.Ping(ctx); err != nil || got != 1 {
 		t.Fatalf("Ping = %d, %v; want 1, nil", got, err)
