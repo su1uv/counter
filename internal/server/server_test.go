@@ -1,6 +1,9 @@
 package server
 
 import (
+	"bytes"
+	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -45,5 +48,35 @@ func TestRecoversFromPanic(t *testing.T) {
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/boom", nil))
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("status = %d, want 500", rec.Code)
+	}
+}
+
+type fakePinger struct{ err error }
+
+func (f fakePinger) Ping(context.Context) (int32, error) { return 1, f.err }
+
+func TestReadyz(t *testing.T) {
+	tests := []struct {
+		name       string
+		err        error
+		wantStatus int
+		wantLog    string
+	}{
+		{"database up", nil, http.StatusOK, ""},
+		{"database down", errors.New("connection refused"), http.StatusServiceUnavailable, "connection refused"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var logs bytes.Buffer
+			r := NewRouter(slog.New(slog.NewTextHandler(&logs, nil)), fakePinger{tt.err})
+			rec := httptest.NewRecorder()
+			r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+			if rec.Code != tt.wantStatus {
+				t.Fatalf("status = %d, want %d", rec.Code, tt.wantStatus)
+			}
+			if tt.wantLog != "" && !bytes.Contains(logs.Bytes(), []byte(tt.wantLog)) {
+				t.Fatalf("logs %q lack %q", logs.String(), tt.wantLog)
+			}
+		})
 	}
 }

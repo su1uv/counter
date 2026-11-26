@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"io"
@@ -12,8 +13,11 @@ import (
 	"syscall"
 	"time"
 
+	_ "github.com/jackc/pgx/v5/stdlib"
+
 	"github.com/su1uv/counter/internal/config"
 	"github.com/su1uv/counter/internal/server"
+	"github.com/su1uv/counter/internal/store"
 )
 
 func main() {
@@ -32,10 +36,18 @@ func run(ctx context.Context, getenv func(string) string, stdout io.Writer) erro
 	}
 	logger := slog.New(slog.NewJSONHandler(stdout, nil))
 
-	// No database yet: the router gets a nil Pinger until step 9.
+	db, err := sql.Open("pgx", cfg.DatabaseURL)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	if err := db.PingContext(ctx); err != nil {
+		return fmt.Errorf("ping database: %w", err)
+	}
+
 	srv := &http.Server{
 		Addr:              cfg.Addr,
-		Handler:           server.NewRouter(logger, nil),
+		Handler:           server.NewRouter(logger, store.New(db)),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 

@@ -22,6 +22,14 @@ func NewRouter(logger *slog.Logger, db Pinger) chi.Router {
 	r.Get("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte("ok"))
 	})
+	r.Get("/readyz", func(w http.ResponseWriter, req *http.Request) {
+		if _, err := db.Ping(req.Context()); err != nil {
+			logger.Error("readiness check failed", "error", err)
+			http.Error(w, "database unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		_, _ = w.Write([]byte("ok"))
+	})
 	return r
 }
 
