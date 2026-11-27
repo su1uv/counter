@@ -17,6 +17,7 @@ type Dataset struct {
 	Suppliers      []Supplier
 	PurchaseOrders []PurchaseOrder
 	Movements      []Movement
+	CashMovements  []CashMovement
 }
 
 type Supplier struct {
@@ -119,6 +120,16 @@ type Shift struct {
 	OpeningFloatCents int64
 	ExpectedCashCents int64
 	CountedCashCents  int64
+}
+
+// CashMovement is cash that left the drawer during a shift: a withdrawal
+// to the safe, or a petty expense. AmountCents is positive.
+type CashMovement struct {
+	Shift       int // index into Dataset.Shifts
+	MovedAt     time.Time
+	Kind        string // "withdrawal" or "expense"
+	AmountCents int64
+	Note        string
 }
 
 // Sale times are in the branch's zone. TotalCents includes tax. Cancelled

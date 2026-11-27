@@ -200,5 +200,13 @@ func insert(ctx context.Context, q *store.Queries, ds Dataset) error {
 			return fmt.Errorf("insert %s movement %s: %w", m.Kind, m.Reference, err)
 		}
 	}
+
+	for _, m := range ds.CashMovements {
+		if _, err := q.InsertCashMovement(ctx, store.InsertCashMovementParams{
+			ShiftID: shiftIDs[m.Shift], MovedAt: m.MovedAt, Kind: m.Kind, AmountCents: m.AmountCents, Note: m.Note,
+		}); err != nil {
+			return fmt.Errorf("insert %s from shift %d: %w", m.Kind, m.Shift, err)
+		}
+	}
 	return nil
 }

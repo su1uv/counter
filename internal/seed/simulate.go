@@ -25,6 +25,7 @@ type simulation struct {
 	poFolios     []int   // last purchase order folio of each branch
 	transfers    int     // last transfer number, across branches
 	openToday    [][]int // shift indexes open today at each branch
+	shiftCash    []int64 // cash payments taken during each shift
 	onHand       [][]int // units of each item at each branch
 	onOrder      [][]int // units ordered or in transit, not yet received
 	// returning and arriving hold movements for a later day.
@@ -59,8 +60,8 @@ func newSimulation(r *rand.Rand, cfg Config, loc *time.Location, start time.Time
 // run simulates each day: deliveries and transfers arrive before opening,
 // the register opens, every branch sells during opening hours, and after
 // closing the day's returns go back on the shelf, month-end counts record
-// shrinkage, sold-out items are borrowed from nearby branches, and low
-// stock is reordered.
+// shrinkage, sold-out items are borrowed from nearby branches, low stock
+// is reordered, and the register counts its drawer.
 func (s *simulation) run(start time.Time) {
 	for day := start; day.Before(s.end); day = day.AddDate(0, 0, 1) {
 		s.receive(day)
@@ -72,6 +73,7 @@ func (s *simulation) run(start time.Time) {
 		s.count(day)
 		s.transfer(day)
 		s.reorder(day)
+		s.closeShifts(day)
 	}
 }
 
@@ -127,6 +129,7 @@ func (s *simulation) sell(b int, day time.Time) {
 		if sale.Status != "completed" {
 			continue
 		}
+		s.shiftCash[sale.Shift] += cashPaid(sale)
 		for li, l := range sale.Lines {
 			s.apply(Movement{
 				Branch: b, Item: l.Item, MovedAt: sale.SoldAt, Kind: "sale", Quantity: -l.Quantity,
