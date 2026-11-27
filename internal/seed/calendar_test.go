@@ -89,3 +89,22 @@ func TestSaleSecond(t *testing.T) {
 		t.Fatalf("no afternoon peak: %v", hours)
 	}
 }
+
+func TestIsMonthEnd(t *testing.T) {
+	tests := []struct {
+		day  time.Time
+		want bool
+	}{
+		{time.Date(2026, 5, 31, 0, 0, 0, 0, time.UTC), true},
+		{time.Date(2026, 6, 30, 21, 5, 0, 0, time.UTC), true},
+		{time.Date(2026, 2, 28, 0, 0, 0, 0, time.UTC), true},
+		{time.Date(2028, 2, 28, 0, 0, 0, 0, time.UTC), false},
+		{time.Date(2026, 5, 30, 0, 0, 0, 0, time.UTC), false},
+		{time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC), false},
+	}
+	for _, tt := range tests {
+		if got := isMonthEnd(tt.day); got != tt.want {
+			t.Errorf("isMonthEnd(%v) = %v, want %v", tt.day, got, tt.want)
+		}
+	}
+}

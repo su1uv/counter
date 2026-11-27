@@ -50,7 +50,11 @@ func dayPercent(day time.Time) int {
 }
 
 func isPayday(day time.Time) bool {
-	return day.Day() == 15 || day.AddDate(0, 0, 1).Day() == 1
+	return day.Day() == 15 || isMonthEnd(day)
+}
+
+func isMonthEnd(day time.Time) bool {
+	return day.AddDate(0, 0, 1).Day() == 1
 }
 
 // dailySales scales a branch's base daily rate by the calendar and by a

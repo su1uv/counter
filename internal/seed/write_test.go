@@ -197,6 +197,13 @@ func TestWrite(t *testing.T) {
 			OR m.quantity <> pl.quantity OR m.item_id <> pl.item_id OR m.branch_id <> po.branch_id OR m.moved_at <> po.received_at`},
 		{"every receipt matches a purchase order line", `SELECT count(*) FROM inventory_movements
 			WHERE kind = 'receipt' AND purchase_order_line_id IS NULL`},
+		{"transfers move one item between two branches of a city", `SELECT count(*) FROM (
+			SELECT m.reference FROM inventory_movements m JOIN branches b ON b.id = m.branch_id
+			WHERE m.kind IN ('transfer_out', 'transfer_in') GROUP BY m.reference
+			HAVING count(*) <> 2 OR sum(m.quantity) <> 0 OR count(DISTINCT m.branch_id) <> 2
+			OR count(DISTINCT m.item_id) <> 1 OR count(DISTINCT b.city) <> 1) x`},
+		{"count adjustments are shrinkage", `SELECT count(*) FROM inventory_movements
+			WHERE kind = 'adjustment' AND quantity >= 0`},
 	})
 
 	first := fingerprint(t, db)
@@ -290,5 +297,7 @@ func TestWriteSalesPatterns(t *testing.T) {
 			WHERE NOT EXISTS (SELECT 1 FROM sale_payments GROUP BY sale_id HAVING count(*) > 1)`},
 		{"some employees left", `SELECT count(*) FROM (SELECT 1) x
 			WHERE NOT EXISTS (SELECT 1 FROM employees WHERE terminated_on IS NOT NULL)`},
-	})
+		{"some transfers and shrinkage", `SELECT count(*) FROM (SELECT 1) x
+			WHERE NOT EXISTS (SELECT 1 FROM inventory_movements WHERE kind = 'transfer_in')
+			OR NOT EXISTS (SELECT 1 FROM inventory_movements WHERE kind = 'adjustment')`}})
 }

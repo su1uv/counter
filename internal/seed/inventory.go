@@ -1,6 +1,9 @@
 package seed
 
-import "time"
+import (
+	"fmt"
+	"time"
+)
 
 // Stock policy, in days of a branch's expected demand for an item: reorder
 // when stock falls to reorderDays, and order up to coverDays.
@@ -56,6 +59,80 @@ func stockPolicies(base []int, mix [][]int) [][]stockPolicy {
 
 func ceilDiv(n, d int64) int {
 	return int((n + d - 1) / d)
+}
+
+// After closing, monthly counts come first, then transfers leave, then
+// purchase orders go out (see orderSecond). Shrinkage is the chance, per
+// item a branch has, that a count comes up one unit short.
+const (
+	countSecond    = 21*3600 + 5*60
+	transferSecond = 21*3600 + 15*60
+	shrinkPerMille = 5
+)
+
+// count runs after closing on the last day of each month. Each branch
+// counts every item it has, and a few come up one unit short.
+func (s *simulation) count(day time.Time) {
+	if !isMonthEnd(day) {
+		return
+	}
+	y, m, d := day.Date()
+	at := time.Date(y, m, d, 0, 0, countSecond, 0, s.loc)
+	for b, branch := range s.ds.Branches {
+		ref := fmt.Sprintf("CONTEO-%s-%04d-%02d", branch.Code, y, m)
+		for i, it := range s.ds.Items {
+			if s.onHand[b][i] > 0 && s.r.IntN(1000) < shrinkPerMille {
+				s.apply(Movement{
+					Branch: b, Item: i, MovedAt: at, Kind: "adjustment", Quantity: -1,
+					UnitCostCents: it.UnitCostCents, Reference: ref,
+				})
+			}
+		}
+	}
+}
+
+// transfer runs after closing. A branch that sold out of an item borrows
+// it from the branch in the same city with the most units above its own
+// reorder point, up to the borrower's reorder point. The units leave that
+// night and arrive before the next opening, so nothing moves on the
+// window's last day.
+func (s *simulation) transfer(day time.Time) {
+	next := day.AddDate(0, 0, 1)
+	if !next.Before(s.end) {
+		return
+	}
+	y, m, d := day.Date()
+	ny, nm, nd := next.Date()
+	leaves := time.Date(y, m, d, 0, 0, transferSecond, 0, s.loc)
+	arrives := time.Date(ny, nm, nd, 0, 0, receiveSecond, 0, s.loc)
+	for b, branch := range s.ds.Branches {
+		for i, it := range s.ds.Items {
+			if s.onHand[b][i] > 0 {
+				continue
+			}
+			donor, spare := -1, 0
+			for o, other := range s.ds.Branches {
+				if left := s.onHand[o][i] - s.policies[o][i].ReorderPoint - 1; o != b && other.City == branch.City && left > spare {
+					donor, spare = o, left
+				}
+			}
+			if donor < 0 {
+				continue
+			}
+			qty := min(spare, s.policies[b][i].ReorderPoint)
+			s.transfers++
+			ref := fmt.Sprintf("TR-%06d", s.transfers)
+			s.apply(Movement{
+				Branch: donor, Item: i, MovedAt: leaves, Kind: "transfer_out", Quantity: -qty,
+				UnitCostCents: it.UnitCostCents, Reference: ref,
+			})
+			s.arriving = append(s.arriving, Movement{
+				Branch: b, Item: i, MovedAt: arrives, Kind: "transfer_in", Quantity: qty,
+				UnitCostCents: it.UnitCostCents, Reference: ref,
+			})
+			s.onOrder[b][i] += qty
+		}
+	}
 }
 
 // openingStock fills every branch with every item up to its policy's Max at

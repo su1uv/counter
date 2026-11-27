@@ -110,6 +110,68 @@ func TestLedgerMatchesSalesAndReturns(t *testing.T) {
 	}
 }
 
+func TestTransfersAndCounts(t *testing.T) {
+	tests := []struct {
+		name string
+		cfg  Config
+	}{
+		{"small", smallConfig()},
+		{"default", Default()},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := tt.cfg
+			ds := mustGenerate(t, cfg)
+			loc, _ := time.LoadLocation(cfg.Timezone)
+			end := time.Date(cfg.Start.Year(), cfg.Start.Month(), cfg.Start.Day(), 0, 0, 0, 0, loc).AddDate(0, cfg.Months, 0)
+
+			legs := map[string][]Movement{}
+			var refs []string
+			adjustments, stocked := 0, len(ds.Branches)*len(ds.Items)*cfg.Months
+			for _, m := range ds.Movements {
+				switch m.Kind {
+				case "transfer_out", "transfer_in":
+					if legs[m.Reference] == nil {
+						refs = append(refs, m.Reference)
+					}
+					legs[m.Reference] = append(legs[m.Reference], m)
+				case "adjustment":
+					adjustments++
+					b := ds.Branches[m.Branch]
+					want := "CONTEO-" + b.Code + "-" + m.MovedAt.Format("2006-01")
+					if m.Quantity != -1 || !isMonthEnd(m.MovedAt) || m.MovedAt.Hour() != 21 || m.Reference != want ||
+						m.UnitCostCents != ds.Items[m.Item].UnitCostCents || m.MovedAt.Location().String() != cfg.Timezone {
+						t.Fatalf("bad count adjustment %+v", m)
+					}
+				}
+			}
+			for _, ref := range refs {
+				l := legs[ref]
+				if len(l) != 2 || l[0].Kind != "transfer_out" || l[1].Kind != "transfer_in" {
+					t.Fatalf("transfer %s has legs %+v", ref, l)
+				}
+				out, in := l[0], l[1]
+				from, to := ds.Branches[out.Branch], ds.Branches[in.Branch]
+				if out.Branch == in.Branch || from.City != to.City || out.Item != in.Item || out.Quantity >= 0 ||
+					in.Quantity != -out.Quantity || out.UnitCostCents != ds.Items[out.Item].UnitCostCents ||
+					in.UnitCostCents != out.UnitCostCents {
+					t.Fatalf("transfer %s from %s to %s: %+v", ref, from.Code, to.Code, l)
+				}
+				if !dateOf(in.MovedAt).Equal(dateOf(out.MovedAt).AddDate(0, 0, 1)) ||
+					out.MovedAt.Hour() != 21 || in.MovedAt.Hour() != 10 || !in.MovedAt.Before(end) {
+					t.Fatalf("transfer %s leaves %v, arrives %v", ref, out.MovedAt, in.MovedAt)
+				}
+			}
+			if tt.name == "default" && (len(refs) == 0 || adjustments == 0) {
+				t.Fatalf("%d transfers, %d count adjustments; want some of each", len(refs), adjustments)
+			}
+			if adjustments*100 > stocked {
+				t.Fatalf("%d count adjustments over %d branch-item months, want under 1%%", adjustments, stocked)
+			}
+		})
+	}
+}
+
 func TestOpeningStock(t *testing.T) {
 	tests := []struct {
 		name string

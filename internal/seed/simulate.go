@@ -23,6 +23,7 @@ type simulation struct {
 	itemSupplier []int   // supplier of each item
 	folios       []int   // last sale folio of each branch
 	poFolios     []int   // last purchase order folio of each branch
+	transfers    int     // last transfer number, across branches
 	onHand       [][]int // units of each item at each branch
 	onOrder      [][]int // units ordered or in transit, not yet received
 	// returning and arriving hold movements for a later day.
@@ -54,9 +55,10 @@ func newSimulation(r *rand.Rand, cfg Config, loc *time.Location, start time.Time
 	return s
 }
 
-// run simulates each day: deliveries arrive before opening, every branch
-// sells during opening hours, and after closing the day's returns go back
-// on the shelf and low stock is reordered.
+// run simulates each day: deliveries and transfers arrive before opening,
+// every branch sells during opening hours, and after closing the day's
+// returns go back on the shelf, month-end counts record shrinkage, sold-out
+// items are borrowed from nearby branches, and low stock is reordered.
 func (s *simulation) run(start time.Time) {
 	for day := start; day.Before(s.end); day = day.AddDate(0, 0, 1) {
 		s.receive(day)
@@ -64,6 +66,8 @@ func (s *simulation) run(start time.Time) {
 			s.sell(b, day)
 		}
 		s.restockReturns(day)
+		s.count(day)
+		s.transfer(day)
 		s.reorder(day)
 	}
 }
