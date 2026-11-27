@@ -13,7 +13,7 @@ Counter is a Go service. A store manager asks a question in Spanish or English, 
 
 | Variable | Used by | Notes |
 | --- | --- | --- |
-| `DATABASE_URL` | service, `migrate` | required |
+| `DATABASE_URL` | service, `migrate`, `seed` | required |
 | `ADDR` | service | default `:8080` |
 | `TEST_DATABASE_URL` | integration tests | tests skip when unset |
 
@@ -29,6 +29,19 @@ make run
 curl localhost:8080/healthz   # liveness, no database
 curl localhost:8080/readyz    # readiness, pings the database
 ```
+
+## Seed data
+
+`make seed` fills the database with synthetic data for "Joyería Aurora", a fictional jewelry chain: 15 branches, 8 categories, 300 items, 60 employees, and sales with lines from 2026-05-01 to 2026-10-31. Money is MXN in integer centavos, and shelf prices include 16% IVA. Data values are in Spanish.
+
+```bash
+make migrate-up                  # seed never migrates
+make seed                        # refuses if the seed tables already have rows
+make seed SEED_FLAGS=-reset      # truncates the seed tables, then seeds
+make seed SEED=7 SEED_FLAGS=-reset
+```
+
+Seeding is deterministic: the same `SEED` (default 1), code, and Go version produce the same rows and the same ids. The window is fixed, not relative to today. With `SEED=1` a full run inserts 82,392 sales and 164,903 sale lines in about 12 seconds on a laptop against the Compose Postgres. The `seed` command is separate from the service; the service binary does not import it.
 
 ## Deploy order
 
