@@ -32,7 +32,7 @@ curl localhost:8080/readyz    # readiness, pings the database
 
 ## Seed data
 
-`make seed` fills the database with synthetic data for "Joyería Aurora", a fictional jewelry chain: 15 branches, 8 categories, 300 items, employees, sales with lines, payments and returns, the inventory behind them (suppliers, purchase orders and a stock ledger), and cash-register shifts from 2026-05-01 to 2026-10-31. Money is MXN in integer centavos, and shelf prices include 16% IVA. Data values are in Spanish.
+`make seed` fills the database with synthetic data for "Joyería Aurora", a fictional jewelry chain: 15 branches, 8 categories, 300 items, employees, sales with lines, payments and returns, the inventory behind them (suppliers, purchase orders and a stock ledger), cash-register shifts, and customer and CFDI invoice records from 2026-05-01 to 2026-10-31. Money is MXN in integer centavos, and shelf prices include 16% IVA. Data values are in Spanish.
 
 ```bash
 make migrate-up                  # seed never migrates
@@ -41,7 +41,7 @@ make seed SEED_FLAGS=-reset      # truncates the seed tables, then seeds
 make seed SEED=7 SEED_FLAGS=-reset
 ```
 
-Seeding is deterministic: the same `SEED` (default 1), code, and Go version produce the same rows and the same ids. The window is fixed, not relative to today. With `SEED=1` a full run inserts 78 employees, 82,013 sales, 112,878 sale lines, 85,237 payments, 2,023 returns, 9,491 purchase orders, 160,017 inventory movements, 15 cash registers, 3,615 shifts and 3,959 cash movements in about 29 seconds on a laptop against the Compose Postgres. The `seed` command is separate from the service; the service binary does not import it.
+Seeding is deterministic: the same `SEED` (default 1), code, and Go version produce the same rows and the same ids. The window is fixed, not relative to today. With `SEED=1` a full run inserts 78 employees, 82,013 sales, 112,878 sale lines, 85,237 payments, 2,023 returns, 9,491 purchase orders, 160,017 inventory movements, 15 cash registers, 3,615 shifts, 3,959 cash movements, 121 customers and 16,088 invoices in about 29 seconds on a laptop against the Compose Postgres. The `seed` command is separate from the service; the service binary does not import it.
 
 The sales follow patterns an agent can find in SQL:
 
@@ -68,6 +68,11 @@ The cash register is the corte de caja a point-of-sale system would export:
 - **Expected cash.** It equals the float, plus cash payments rung on the shift, minus the cash share of refunds paid while the shift was open, minus withdrawals and expenses. A return refunds cash in the same proportion as the original sale was paid in cash, on the shift open at `returned_at`, which can be a later day. Card and transfer refunds do not touch the drawer. A cash refund larger than the drawer leaves the expected balance negative.
 - **Movements.** `cash_movements` is cash that left the drawer. On Monday, a shift that can cover it records a petty expense of 150 MXN (`Gasto menor`) an hour after opening. When the drawer is at least 1,000 MXN above the float, the excess goes to the safe in multiples of 100 MXN (`Retiro a caja fuerte`), 30 minutes before closing.
 - **Count.** `counted_cash_cents` is the expected balance plus a small over or short. Four shifts in five count exact. Every fifth shift is off by a non-zero whole-peso amount of at most 200 MXN.
+
+Customers and CFDI invoices are the facturación metadata a point-of-sale export would carry. Nothing is stamped and nothing is sent to the SAT.
+
+- **Customers.** `customers` holds the chain's receptors. `C0001` is Público en general, RFC `XAXX010101000`, régimen `616`, postal code `06000`. The other 120 are fictional: eight named customers per branch. Most are personas físicas (régimen `612`, a 13-character RFC). Every tenth named customer is a persona moral, `Joyería … SA de CV`, régimen `601`, a 12-character RFC. Postal codes are from the cities where the chain has branches.
+- **Invoices.** About 20% of completed sales get one row in `invoices`, issued at `sold_at`. Cancelled sales are not invoiced. A later return leaves the invoice in place; there is no credit note. About 80% of invoices use Público en general with uso `S01`. A named persona física uses `G03`, and a persona moral uses `G01`. `payment_method` is always `PUE`, paid in full at the counter. `payment_form` follows the largest tender: `01` cash, `03` transfer, `04` credit card. Each invoice has its own UUID.
 
 ## Deploy order
 
