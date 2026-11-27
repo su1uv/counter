@@ -62,6 +62,16 @@ type Sale struct {
 	TaxCents      int64
 	TotalCents    int64
 	Lines         []SaleLine
+	Payments      []Payment
+}
+
+// Payment amounts add up to the sale total. Card payments carry a brand and
+// the card's last four digits; other methods leave them empty.
+type Payment struct {
+	Method      string // "card", "cash" or "transfer"
+	AmountCents int64
+	CardBrand   string
+	Last4       string
 }
 
 // SaleLine copies the item's price and cost at the moment of sale.

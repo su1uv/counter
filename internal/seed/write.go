@@ -85,6 +85,15 @@ func insert(ctx context.Context, q *store.Queries, ds Dataset) error {
 				return fmt.Errorf("insert sale %s line %d: %w", s.Folio, l.LineNo, err)
 			}
 		}
+		for _, p := range s.Payments {
+			if _, err := q.InsertSalePayment(ctx, store.InsertSalePaymentParams{
+				SaleID: saleID, Method: p.Method, AmountCents: p.AmountCents,
+				CardBrand: sql.NullString{String: p.CardBrand, Valid: p.CardBrand != ""},
+				Last4:     sql.NullString{String: p.Last4, Valid: p.Last4 != ""},
+			}); err != nil {
+				return fmt.Errorf("insert sale %s %s payment: %w", s.Folio, p.Method, err)
+			}
+		}
 	}
 	return nil
 }

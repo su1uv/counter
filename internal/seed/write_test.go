@@ -70,6 +70,14 @@ func countLines(ds Dataset) int64 {
 	return n
 }
 
+func countPayments(ds Dataset) int64 {
+	var n int64
+	for _, s := range ds.Sales {
+		n += int64(len(s.Payments))
+	}
+	return n
+}
+
 func TestWrite(t *testing.T) {
 	db := openMigratedDB(t)
 	ctx := context.Background()
@@ -84,12 +92,13 @@ func TestWrite(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := store.CountSeedRowsRow{
-		Branches:   int64(len(ds.Branches)),
-		Categories: int64(len(ds.Categories)),
-		Items:      int64(len(ds.Items)),
-		Employees:  int64(len(ds.Employees)),
-		Sales:      int64(len(ds.Sales)),
-		SaleLines:  countLines(ds),
+		Branches:     int64(len(ds.Branches)),
+		Categories:   int64(len(ds.Categories)),
+		Items:        int64(len(ds.Items)),
+		Employees:    int64(len(ds.Employees)),
+		Sales:        int64(len(ds.Sales)),
+		SaleLines:    countLines(ds),
+		SalePayments: countPayments(ds),
 	}
 	if got != want {
 		t.Fatalf("CountSeedRows = %+v, want %+v", got, want)
@@ -104,6 +113,8 @@ func TestWrite(t *testing.T) {
 			JOIN employees e ON e.id = s.employee_id WHERE e.branch_id <> s.branch_id`},
 		{"line cost matches item cost", `SELECT count(*) FROM sale_lines l
 			JOIN items i ON i.id = l.item_id WHERE l.unit_cost_cents <> i.unit_cost_cents`},
+		{"payments add up to the sale total", `SELECT count(*) FROM sales s
+			WHERE s.total_cents <> (SELECT coalesce(sum(p.amount_cents), 0) FROM sale_payments p WHERE p.sale_id = s.id)`},
 		{"first sale keeps its folio", `SELECT count(*) FROM sales WHERE id = 1 AND folio <> '` + ds.Sales[0].Folio + `'`},
 	}
 	for _, inv := range invariants {
@@ -147,6 +158,7 @@ func TestWriteErrors(t *testing.T) {
 		{"employee", func(ds *Dataset) { ds.Employees[1].Code = ds.Employees[0].Code }},
 		{"sale", func(ds *Dataset) { ds.Sales[1].Folio = ds.Sales[0].Folio }},
 		{"sale line", func(ds *Dataset) { ds.Sales[0].Lines = append(ds.Sales[0].Lines, ds.Sales[0].Lines[0]) }},
+		{"payment", func(ds *Dataset) { ds.Sales[0].Payments[0].Method = "cheque" }},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

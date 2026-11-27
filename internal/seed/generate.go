@@ -73,6 +73,7 @@ func generateSales(r *rand.Rand, cfg Config, loc *time.Location, start time.Time
 					sale.TotalCents += l.TotalCents
 				}
 				sale.SubtotalCents, sale.TaxCents = SplitTax(sale.TotalCents, ivaBP)
+				sale.Payments = generatePayments(r, sale.TotalCents)
 				out = append(out, sale)
 			}
 		}
