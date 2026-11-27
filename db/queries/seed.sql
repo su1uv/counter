@@ -41,4 +41,5 @@ SELECT
     (SELECT count(*) FROM sale_lines) AS sale_lines;
 
 -- name: ResetSeedData :exec
-TRUNCATE sale_lines, sales, employees, items, categories, branches RESTART IDENTITY;
+TRUNCATE sale_return_lines, sale_returns, sale_payments,
+    sale_lines, sales, employees, items, categories, branches RESTART IDENTITY;

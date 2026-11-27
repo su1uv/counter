@@ -37,30 +37,49 @@ func tableExists(t *testing.T, db *sql.DB, name string) bool {
 	return exists
 }
 
+func columnExists(t *testing.T, db *sql.DB, table, column string) bool {
+	t.Helper()
+	var exists bool
+	err := db.QueryRow(`SELECT EXISTS (SELECT 1 FROM information_schema.columns
+		WHERE table_schema = current_schema() AND table_name = $1 AND column_name = $2)`, table, column).Scan(&exists)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return exists
+}
+
 // downAll reverts every applied migration; "down" reverts one at a time.
 func downAll(ctx context.Context, db *sql.DB) {
 	for Run(ctx, db, migrationsDir, "down", &bytes.Buffer{}) == nil {
 	}
 }
 
-var retailTables = []string{"branches", "categories", "items", "employees", "sales", "sale_lines"}
+var (
+	retailTables  = []string{"branches", "categories", "items", "employees", "sales", "sale_lines"}
+	realismTables = []string{"sale_payments", "sale_returns", "sale_return_lines"}
+	// realismColumns are added to retail tables by 00003.
+	realismColumns = [][2]string{{"branches", "tier"}, {"employees", "terminated_on"}, {"sales", "status"}}
+)
 
 func TestRunLifecycle(t *testing.T) {
 	db := openTestDB(t)
 	ctx := context.Background()
 	var out bytes.Buffer
+	all := []string{"00001_schema_probe.sql", "00002_retail_core.sql", "00003_sales_realism.sql"}
 
 	steps := []struct {
-		command    string
-		wantOut    []string
-		wantProbe  bool
-		wantRetail bool
+		command     string
+		wantOut     []string
+		wantProbe   bool
+		wantRetail  bool
+		wantRealism bool
 	}{
-		{"up", []string{"00001_schema_probe.sql", "00002_retail_core.sql"}, true, true},
-		{"status", []string{"00001_schema_probe.sql", "00002_retail_core.sql"}, true, true},
-		{"down", []string{"00002_retail_core.sql"}, true, false},
-		{"down", []string{"00001_schema_probe.sql"}, false, false},
-		{"up", []string{"00001_schema_probe.sql", "00002_retail_core.sql"}, true, true},
+		{"up", all, true, true, true},
+		{"status", all, true, true, true},
+		{"down", []string{"00003_sales_realism.sql"}, true, true, false},
+		{"down", []string{"00002_retail_core.sql"}, true, false, false},
+		{"down", []string{"00001_schema_probe.sql"}, false, false, false},
+		{"up", all, true, true, true},
 	}
 	downAll(ctx, db)
 	t.Cleanup(func() { downAll(ctx, db) })
@@ -80,6 +99,16 @@ func TestRunLifecycle(t *testing.T) {
 		for _, table := range retailTables {
 			if got := tableExists(t, db, table); got != s.wantRetail {
 				t.Fatalf("after %s: %s exists = %v, want %v", s.command, table, got, s.wantRetail)
+			}
+		}
+		for _, table := range realismTables {
+			if got := tableExists(t, db, table); got != s.wantRealism {
+				t.Fatalf("after %s: %s exists = %v, want %v", s.command, table, got, s.wantRealism)
+			}
+		}
+		for _, c := range realismColumns {
+			if got := columnExists(t, db, c[0], c[1]); got != s.wantRealism {
+				t.Fatalf("after %s: %s.%s exists = %v, want %v", s.command, c[0], c[1], got, s.wantRealism)
 			}
 		}
 	}

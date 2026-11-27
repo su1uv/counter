@@ -5,6 +5,7 @@
 package store
 
 import (
+	"database/sql"
 	"time"
 )
 
@@ -16,6 +17,7 @@ type Branch struct {
 	State    string
 	Timezone string
 	OpenedOn time.Time
+	Tier     string
 }
 
 type Category struct {
@@ -25,12 +27,13 @@ type Category struct {
 }
 
 type Employee struct {
-	ID       int64
-	Code     string
-	BranchID int64
-	FullName string
-	Role     string
-	HiredOn  time.Time
+	ID           int64
+	Code         string
+	BranchID     int64
+	FullName     string
+	Role         string
+	HiredOn      time.Time
+	TerminatedOn sql.NullTime
 }
 
 type Item struct {
@@ -53,6 +56,7 @@ type Sale struct {
 	SubtotalCents int64
 	TaxCents      int64
 	TotalCents    int64
+	Status        string
 }
 
 type SaleLine struct {
@@ -65,6 +69,35 @@ type SaleLine struct {
 	UnitCostCents  int64
 	DiscountCents  int64
 	TotalCents     int64
+}
+
+type SalePayment struct {
+	ID          int64
+	SaleID      int64
+	Method      string
+	AmountCents int64
+	CardBrand   sql.NullString
+	Last4       sql.NullString
+}
+
+type SaleReturn struct {
+	ID            int64
+	Folio         string
+	SaleID        int64
+	EmployeeID    int64
+	ReturnedAt    time.Time
+	SubtotalCents int64
+	TaxCents      int64
+	TotalCents    int64
+}
+
+type SaleReturnLine struct {
+	ID          int64
+	ReturnID    int64
+	LineNo      int32
+	SaleLineID  int64
+	Quantity    int32
+	RefundCents int64
 }
 
 type SchemaProbe struct {

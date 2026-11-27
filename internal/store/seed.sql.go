@@ -216,7 +216,8 @@ func (q *Queries) InsertSaleLine(ctx context.Context, arg InsertSaleLineParams) 
 }
 
 const resetSeedData = `-- name: ResetSeedData :exec
-TRUNCATE sale_lines, sales, employees, items, categories, branches RESTART IDENTITY
+TRUNCATE sale_return_lines, sale_returns, sale_payments,
+    sale_lines, sales, employees, items, categories, branches RESTART IDENTITY
 `
 
 func (q *Queries) ResetSeedData(ctx context.Context) error {
