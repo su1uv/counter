@@ -55,7 +55,11 @@ func fingerprint(t *testing.T, db *sql.DB) string {
 		(SELECT md5(string_agg(t::text, '|' ORDER BY id)) FROM sale_lines t),
 		(SELECT md5(string_agg(t::text, '|' ORDER BY id)) FROM sale_payments t),
 		(SELECT md5(string_agg(t::text, '|' ORDER BY id)) FROM sale_returns t),
-		(SELECT md5(string_agg(t::text, '|' ORDER BY id)) FROM sale_return_lines t))`).Scan(&fp)
+		(SELECT md5(string_agg(t::text, '|' ORDER BY id)) FROM sale_return_lines t),
+		(SELECT md5(string_agg(t::text, '|' ORDER BY id)) FROM suppliers t),
+		(SELECT md5(string_agg(t::text, '|' ORDER BY id)) FROM purchase_orders t),
+		(SELECT md5(string_agg(t::text, '|' ORDER BY id)) FROM purchase_order_lines t),
+		(SELECT md5(string_agg(t::text, '|' ORDER BY id)) FROM inventory_movements t))`).Scan(&fp)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -120,6 +124,8 @@ func TestWrite(t *testing.T) {
 		SalePayments:    countPayments(ds),
 		SaleReturns:     int64(len(ds.Returns)),
 		SaleReturnLines: countReturnLines(ds),
+
+		InventoryMovements: int64(len(ds.Movements)),
 	}
 	if want.SaleReturns == 0 {
 		t.Fatal("small dataset has no returns to write")
@@ -152,6 +158,10 @@ func TestWrite(t *testing.T) {
 			JOIN sales s ON s.id = r.sale_id JOIN employees e ON e.id = r.employee_id
 			WHERE r.returned_at <= s.sold_at OR r.returned_at > s.sold_at + interval '31 days' OR e.branch_id <> s.branch_id`},
 		{"first sale keeps its folio", `SELECT count(*) FROM sales WHERE id = 1 AND folio <> '` + ds.Sales[0].Folio + `'`},
+		{"every branch stocks every item", `SELECT count(*) FROM branches b CROSS JOIN items i
+			WHERE NOT EXISTS (SELECT 1 FROM stock_levels s WHERE s.branch_id = b.id AND s.item_id = i.id)`},
+		{"movement cost matches item cost", `SELECT count(*) FROM inventory_movements m
+			JOIN items i ON i.id = m.item_id WHERE m.unit_cost_cents <> i.unit_cost_cents`},
 	})
 
 	first := fingerprint(t, db)
@@ -191,6 +201,7 @@ func TestWriteErrors(t *testing.T) {
 		{"payment", func(ds *Dataset) { ds.Sales[0].Payments[0].Method = "cheque" }},
 		{"return", func(ds *Dataset) { ds.Returns[0].TotalCents++ }},
 		{"return line", func(ds *Dataset) { ds.Returns[0].Lines = append(ds.Returns[0].Lines, ds.Returns[0].Lines[0]) }},
+		{"opening movement", func(ds *Dataset) { ds.Movements[0].Quantity = -1 }},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

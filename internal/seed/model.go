@@ -12,6 +12,20 @@ type Dataset struct {
 	Employees  []Employee
 	Sales      []Sale
 	Returns    []Return
+	Movements  []Movement
+}
+
+// Movement is one row of the inventory ledger, in the branch's zone.
+// Quantity is signed: sales and transfers out are negative. Reference is
+// the business code of the source document.
+type Movement struct {
+	Branch        int // index into Dataset.Branches
+	Item          int // index into Dataset.Items
+	MovedAt       time.Time
+	Kind          string // "opening", "receipt", "sale", "return", "transfer_in", "transfer_out" or "adjustment"
+	Quantity      int
+	UnitCostCents int64
+	Reference     string
 }
 
 type Branch struct {

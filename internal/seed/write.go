@@ -119,5 +119,14 @@ func insert(ctx context.Context, q *store.Queries, ds Dataset) error {
 			}
 		}
 	}
+
+	for _, m := range ds.Movements {
+		if _, err := q.InsertInventoryMovement(ctx, store.InsertInventoryMovementParams{
+			BranchID: branchIDs[m.Branch], ItemID: itemIDs[m.Item], MovedAt: m.MovedAt, Kind: m.Kind,
+			Quantity: int32(m.Quantity), UnitCostCents: m.UnitCostCents, Reference: m.Reference,
+		}); err != nil {
+			return fmt.Errorf("insert %s movement %s: %w", m.Kind, m.Reference, err)
+		}
+	}
 	return nil
 }

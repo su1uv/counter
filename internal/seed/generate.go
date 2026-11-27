@@ -24,9 +24,24 @@ func Generate(cfg Config) (Dataset, error) {
 	ds.Items = generateItems(r, cfg.Items)
 	ds.Employees = generateEmployees(r, cfg, ds.Branches, start)
 	loc, _ := time.LoadLocation(cfg.Timezone) // checked by Validate
-	ds.Sales = generateSales(r, cfg, loc, start, ds)
+	base, mix := branchDemand(r, cfg, ds.Branches, ds.Items)
+	policies := stockPolicies(base, mix)
+	ds.Movements = openingStock(ds, policies, time.Date(start.Year(), start.Month(), start.Day(), 0, 0, 0, 0, loc))
+	ds.Sales = generateSales(r, cfg, loc, start, ds, base, mix)
 	ds.Returns = generateReturns(r, cfg, loc, start, ds)
 	return ds, nil
+}
+
+// branchDemand picks each branch's base daily sales by tier, and weighs
+// every item for the branch's tier.
+func branchDemand(r *rand.Rand, cfg Config, branches []Branch, items []Item) (base []int, mix [][]int) {
+	base = make([]int, len(branches))
+	mix = make([][]int, len(branches))
+	for b, branch := range branches {
+		base[b] = tierBase(r, cfg, tiers[branch.Tier])
+		mix[b] = itemWeights(tiers[branch.Tier], items)
+	}
+	return base, mix
 }
 
 // staffByBranch lists each branch's employees as indexes into employees.
@@ -55,14 +70,8 @@ func pickOnDuty(r *rand.Rand, employees []Employee, staff []int, day time.Time) 
 // weighted by productivity. Folios run per branch in time order. A few
 // sales are cancelled the same day; they keep their lines but have no
 // payments.
-func generateSales(r *rand.Rand, cfg Config, loc *time.Location, start time.Time, ds Dataset) []Sale {
+func generateSales(r *rand.Rand, cfg Config, loc *time.Location, start time.Time, ds Dataset, base []int, mix [][]int) []Sale {
 	staff := staffByBranch(ds.Branches, ds.Employees)
-	base := make([]int, len(ds.Branches))
-	mix := make([][]int, len(ds.Branches))
-	for b, branch := range ds.Branches {
-		base[b] = tierBase(r, cfg, tiers[branch.Tier])
-		mix[b] = itemWeights(tiers[branch.Tier], ds.Items)
-	}
 	folios := make([]int, len(ds.Branches))
 	end := start.AddDate(0, cfg.Months, 0)
 	var out []Sale
