@@ -78,6 +78,25 @@ func countPayments(ds Dataset) int64 {
 	return n
 }
 
+func countReturnLines(ds Dataset) int64 {
+	var n int64
+	for _, r := range ds.Returns {
+		n += int64(len(r.Lines))
+	}
+	return n
+}
+
+// zeroViolations runs queries that count rows breaking a rule.
+func zeroViolations(t *testing.T, db *sql.DB, rules []struct{ name, query string }) {
+	t.Helper()
+	for _, rule := range rules {
+		var bad int
+		if err := db.QueryRow(rule.query).Scan(&bad); err != nil || bad != 0 {
+			t.Fatalf("%s: %d violations, %v", rule.name, bad, err)
+		}
+	}
+}
+
 func TestWrite(t *testing.T) {
 	db := openMigratedDB(t)
 	ctx := context.Background()
@@ -92,37 +111,48 @@ func TestWrite(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := store.CountSeedRowsRow{
-		Branches:     int64(len(ds.Branches)),
-		Categories:   int64(len(ds.Categories)),
-		Items:        int64(len(ds.Items)),
-		Employees:    int64(len(ds.Employees)),
-		Sales:        int64(len(ds.Sales)),
-		SaleLines:    countLines(ds),
-		SalePayments: countPayments(ds),
+		Branches:        int64(len(ds.Branches)),
+		Categories:      int64(len(ds.Categories)),
+		Items:           int64(len(ds.Items)),
+		Employees:       int64(len(ds.Employees)),
+		Sales:           int64(len(ds.Sales)),
+		SaleLines:       countLines(ds),
+		SalePayments:    countPayments(ds),
+		SaleReturns:     int64(len(ds.Returns)),
+		SaleReturnLines: countReturnLines(ds),
+	}
+	if want.SaleReturns == 0 {
+		t.Fatal("small dataset has no returns to write")
 	}
 	if got != want {
 		t.Fatalf("CountSeedRows = %+v, want %+v", got, want)
 	}
 
-	invariants := []struct {
-		name, query string
-	}{
+	zeroViolations(t, db, []struct{ name, query string }{
 		{"sale total equals its lines", `SELECT count(*) FROM sales s
 			WHERE s.total_cents <> (SELECT sum(l.total_cents) FROM sale_lines l WHERE l.sale_id = s.id)`},
 		{"seller works at the sale's branch", `SELECT count(*) FROM sales s
 			JOIN employees e ON e.id = s.employee_id WHERE e.branch_id <> s.branch_id`},
 		{"line cost matches item cost", `SELECT count(*) FROM sale_lines l
 			JOIN items i ON i.id = l.item_id WHERE l.unit_cost_cents <> i.unit_cost_cents`},
-		{"payments add up to the sale total", `SELECT count(*) FROM sales s
-			WHERE s.total_cents <> (SELECT coalesce(sum(p.amount_cents), 0) FROM sale_payments p WHERE p.sale_id = s.id)`},
+		{"payments add up to each completed sale total", `SELECT count(*) FROM sales s
+			WHERE s.status = 'completed'
+			AND s.total_cents <> (SELECT coalesce(sum(p.amount_cents), 0) FROM sale_payments p WHERE p.sale_id = s.id)`},
+		{"cancelled sales have no payments or returns", `SELECT count(*) FROM sales s
+			WHERE s.status = 'cancelled' AND (EXISTS (SELECT 1 FROM sale_payments p WHERE p.sale_id = s.id)
+			OR EXISTS (SELECT 1 FROM sale_returns r WHERE r.sale_id = s.id))`},
+		{"returned quantity at most sold quantity", `SELECT count(*) FROM sale_lines l
+			WHERE l.quantity < (SELECT coalesce(sum(rl.quantity), 0) FROM sale_return_lines rl WHERE rl.sale_line_id = l.id)`},
+		{"return line belongs to the returned sale", `SELECT count(*) FROM sale_return_lines rl
+			JOIN sale_returns r ON r.id = rl.return_id JOIN sale_lines l ON l.id = rl.sale_line_id
+			WHERE l.sale_id <> r.sale_id`},
+		{"return total equals its refunds", `SELECT count(*) FROM sale_returns r
+			WHERE r.total_cents <> (SELECT sum(rl.refund_cents) FROM sale_return_lines rl WHERE rl.return_id = r.id)`},
+		{"return within 30 days, at the sale's branch", `SELECT count(*) FROM sale_returns r
+			JOIN sales s ON s.id = r.sale_id JOIN employees e ON e.id = r.employee_id
+			WHERE r.returned_at <= s.sold_at OR r.returned_at > s.sold_at + interval '31 days' OR e.branch_id <> s.branch_id`},
 		{"first sale keeps its folio", `SELECT count(*) FROM sales WHERE id = 1 AND folio <> '` + ds.Sales[0].Folio + `'`},
-	}
-	for _, inv := range invariants {
-		var bad int
-		if err := db.QueryRow(inv.query).Scan(&bad); err != nil || bad != 0 {
-			t.Fatalf("%s: %d violations, %v", inv.name, bad, err)
-		}
-	}
+	})
 
 	first := fingerprint(t, db)
 	if err := Write(ctx, db, ds); err == nil {
@@ -147,7 +177,7 @@ func TestWriteErrors(t *testing.T) {
 	ctx := context.Background()
 	base := mustGenerate(t, smallConfig())
 
-	// Each edit duplicates a unique key so that one insert kind fails.
+	// Each edit breaks a unique key or a check so that one insert kind fails.
 	tests := []struct {
 		name string
 		edit func(*Dataset)
@@ -159,6 +189,8 @@ func TestWriteErrors(t *testing.T) {
 		{"sale", func(ds *Dataset) { ds.Sales[1].Folio = ds.Sales[0].Folio }},
 		{"sale line", func(ds *Dataset) { ds.Sales[0].Lines = append(ds.Sales[0].Lines, ds.Sales[0].Lines[0]) }},
 		{"payment", func(ds *Dataset) { ds.Sales[0].Payments[0].Method = "cheque" }},
+		{"return", func(ds *Dataset) { ds.Returns[0].TotalCents++ }},
+		{"return line", func(ds *Dataset) { ds.Returns[0].Lines = append(ds.Returns[0].Lines, ds.Returns[0].Lines[0]) }},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -179,5 +211,33 @@ func TestWriteErrors(t *testing.T) {
 		if err := Write(cancelled, db, base); err == nil {
 			t.Fatal("expected error")
 		}
+	})
+}
+
+// TestWriteSalesPatterns checks the Phase 2 shape in SQL over two full
+// months, enough data for the comparisons to be stable.
+func TestWriteSalesPatterns(t *testing.T) {
+	db := openMigratedDB(t)
+	cfg := Default()
+	cfg.Months = 2
+	if err := Write(context.Background(), db, mustGenerate(t, cfg)); err != nil {
+		t.Fatal(err)
+	}
+	zeroViolations(t, db, []struct{ name, query string }{
+		{"Saturday revenue above Monday revenue", `SELECT count(*) FROM (
+			SELECT sum(total_cents) FILTER (WHERE extract(isodow FROM sold_at AT TIME ZONE 'America/Mexico_City') = 6) AS sat,
+			       sum(total_cents) FILTER (WHERE extract(isodow FROM sold_at AT TIME ZONE 'America/Mexico_City') = 1) AS mon
+			FROM sales WHERE status = 'completed') x WHERE sat <= mon`},
+		{"large tier daily revenue above small tier", `SELECT count(*) FROM (
+			SELECT avg(revenue) FILTER (WHERE tier = 'large') AS large, avg(revenue) FILTER (WHERE tier = 'small') AS small
+			FROM (SELECT b.tier, s.branch_id, (s.sold_at AT TIME ZONE b.timezone)::date, sum(s.total_cents) AS revenue
+				FROM sales s JOIN branches b ON b.id = s.branch_id WHERE s.status = 'completed'
+				GROUP BY 1, 2, 3) d) x WHERE large <= small`},
+		{"some sales cancelled", `SELECT count(*) FROM (SELECT 1) x
+			WHERE NOT EXISTS (SELECT 1 FROM sales WHERE status = 'cancelled')`},
+		{"some payments split", `SELECT count(*) FROM (SELECT 1) x
+			WHERE NOT EXISTS (SELECT 1 FROM sale_payments GROUP BY sale_id HAVING count(*) > 1)`},
+		{"some employees left", `SELECT count(*) FROM (SELECT 1) x
+			WHERE NOT EXISTS (SELECT 1 FROM employees WHERE terminated_on IS NOT NULL)`},
 	})
 }

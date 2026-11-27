@@ -223,7 +223,14 @@ func TestGenerateSales(t *testing.T) {
 				if duty := onDuty(ds.Employees, staff[s.Branch], dateOf(s.SoldAt)); !slices.Contains(duty, s.Employee) {
 					t.Fatalf("sale %s by employee %s, who is not on duty", s.Folio, ds.Employees[s.Employee].Code)
 				}
-				if s.Status != "completed" {
+				switch s.Status {
+				case "completed":
+					checkPayments(t, s.TotalCents, s.Payments)
+				case "cancelled":
+					if s.Payments != nil {
+						t.Fatalf("cancelled sale %s has payments", s.Folio)
+					}
+				default:
 					t.Fatalf("sale %s has status %q", s.Folio, s.Status)
 				}
 				if s.SoldAt.Location().String() != cfg.Timezone {

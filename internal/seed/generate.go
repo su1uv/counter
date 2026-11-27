@@ -25,18 +25,38 @@ func Generate(cfg Config) (Dataset, error) {
 	ds.Employees = generateEmployees(r, cfg, ds.Branches, start)
 	loc, _ := time.LoadLocation(cfg.Timezone) // checked by Validate
 	ds.Sales = generateSales(r, cfg, loc, start, ds)
+	ds.Returns = generateReturns(r, cfg, loc, start, ds)
 	return ds, nil
+}
+
+// staffByBranch lists each branch's employees as indexes into employees.
+func staffByBranch(branches []Branch, employees []Employee) [][]int {
+	staff := make([][]int, len(branches))
+	for i, e := range employees {
+		staff[e.Branch] = append(staff[e.Branch], i)
+	}
+	return staff
+}
+
+// pickOnDuty picks one of the staff on duty on day, weighted by
+// productivity.
+func pickOnDuty(r *rand.Rand, employees []Employee, staff []int, day time.Time) int {
+	duty := onDuty(employees, staff, day)
+	weights := make([]int, len(duty))
+	for i, e := range duty {
+		weights[i] = employees[e].Weight
+	}
+	return duty[weightedIndex(r, weights)]
 }
 
 // generateSales walks the window day by day. Each branch's daily count
 // follows its tier's base rate and the calendar (see dailySales), and sale
 // times follow the hourly curve. Each sale is by an employee on duty,
-// weighted by productivity. Folios run per branch in time order.
+// weighted by productivity. Folios run per branch in time order. A few
+// sales are cancelled the same day; they keep their lines but have no
+// payments.
 func generateSales(r *rand.Rand, cfg Config, loc *time.Location, start time.Time, ds Dataset) []Sale {
-	staff := make([][]int, len(ds.Branches))
-	for i, e := range ds.Employees {
-		staff[e.Branch] = append(staff[e.Branch], i)
-	}
+	staff := staffByBranch(ds.Branches, ds.Employees)
 	base := make([]int, len(ds.Branches))
 	mix := make([][]int, len(ds.Branches))
 	for b, branch := range ds.Branches {
@@ -49,11 +69,6 @@ func generateSales(r *rand.Rand, cfg Config, loc *time.Location, start time.Time
 	for day := start; day.Before(end); day = day.AddDate(0, 0, 1) {
 		y, m, d := day.Date()
 		for b, branch := range ds.Branches {
-			duty := onDuty(ds.Employees, staff[b], day)
-			weights := make([]int, len(duty))
-			for i, e := range duty {
-				weights[i] = ds.Employees[e].Weight
-			}
 			times := make([]int, dailySales(r, base[b], day))
 			for i := range times {
 				times[i] = saleSecond(r)
@@ -64,7 +79,7 @@ func generateSales(r *rand.Rand, cfg Config, loc *time.Location, start time.Time
 				sale := Sale{
 					Folio:    fmt.Sprintf("%s-%06d", branch.Code, folios[b]),
 					Branch:   b,
-					Employee: duty[weightedIndex(r, weights)],
+					Employee: pickOnDuty(r, ds.Employees, staff[b], day),
 					SoldAt:   time.Date(y, m, d, 0, 0, sec, 0, loc),
 					Status:   "completed",
 					Lines:    generateLines(r, ds.Items, mix[b]),
@@ -73,7 +88,11 @@ func generateSales(r *rand.Rand, cfg Config, loc *time.Location, start time.Time
 					sale.TotalCents += l.TotalCents
 				}
 				sale.SubtotalCents, sale.TaxCents = SplitTax(sale.TotalCents, ivaBP)
-				sale.Payments = generatePayments(r, sale.TotalCents)
+				if r.IntN(1000) < cancelPerMille {
+					sale.Status = "cancelled"
+				} else {
+					sale.Payments = generatePayments(r, sale.TotalCents)
+				}
 				out = append(out, sale)
 			}
 		}

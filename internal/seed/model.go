@@ -11,6 +11,7 @@ type Dataset struct {
 	Items      []Item
 	Employees  []Employee
 	Sales      []Sale
+	Returns    []Return
 }
 
 type Branch struct {
@@ -51,7 +52,8 @@ type Employee struct {
 	DayOff time.Weekday
 }
 
-// Sale times are in the branch's zone. TotalCents includes tax.
+// Sale times are in the branch's zone. TotalCents includes tax. Cancelled
+// sales have no payments.
 type Sale struct {
 	Folio         string
 	Branch        int // index into Dataset.Branches
@@ -63,6 +65,26 @@ type Sale struct {
 	TotalCents    int64
 	Lines         []SaleLine
 	Payments      []Payment
+}
+
+// Return refunds lines of one completed sale, at the sale's branch, in the
+// branch's zone. TotalCents includes tax.
+type Return struct {
+	Folio         string
+	Sale          int // index into Dataset.Sales
+	Employee      int // index into Dataset.Employees
+	ReturnedAt    time.Time
+	SubtotalCents int64
+	TaxCents      int64
+	TotalCents    int64
+	Lines         []ReturnLine
+}
+
+type ReturnLine struct {
+	LineNo      int
+	SaleLine    int // index into the sale's Lines
+	Quantity    int
+	RefundCents int64
 }
 
 // Payment amounts add up to the sale total. Card payments carry a brand and

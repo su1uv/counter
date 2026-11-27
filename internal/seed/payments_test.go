@@ -70,15 +70,17 @@ func TestGeneratePayments(t *testing.T) {
 func TestPaymentMix(t *testing.T) {
 	ds := mustGenerate(t, Default())
 	methods := map[string]int{}
-	splits := 0
+	splits, n := 0, 0
 	for _, s := range ds.Sales {
-		checkPayments(t, s.TotalCents, s.Payments)
+		if s.Status != "completed" {
+			continue
+		}
+		n++
 		if len(s.Payments) == 2 {
 			splits++
 		}
 		methods[s.Payments[0].Method]++
 	}
-	n := len(ds.Sales)
 	within := func(got, want int) bool { return got*100 >= (want-3)*n && got*100 <= (want+3)*n }
 	if !within(methods["card"], 60) || !within(methods["cash"], 30) || !within(methods["transfer"], 10) {
 		t.Fatalf("first payment methods %v over %d sales, want about 60/30/10%%", methods, n)
