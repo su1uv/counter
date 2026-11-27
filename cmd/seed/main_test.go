@@ -21,7 +21,6 @@ func smallConfig() seed.Config {
 	cfg.Months = 1
 	cfg.Branches = 2
 	cfg.Items = 20
-	cfg.EmployeesPerBranch = 2
 	cfg.MinSalesPerDay = 1
 	cfg.MaxSalesPerDay = 3
 	return cfg

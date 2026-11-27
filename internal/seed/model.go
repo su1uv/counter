@@ -46,6 +46,9 @@ type Employee struct {
 	HiredOn  time.Time
 	// TerminatedOn is the last day worked; zero while still employed.
 	TerminatedOn time.Time
+	// Weight and DayOff are not stored. They decide who rings up each sale.
+	Weight int
+	DayOff time.Weekday
 }
 
 // Sale times are in the branch's zone. TotalCents includes tax.

@@ -31,8 +31,6 @@ func TestValidate(t *testing.T) {
 		{"zero branches", func(c *Config) { c.Branches = 0 }, "branches"},
 		{"too many branches", func(c *Config) { c.Branches = maxBranches + 1 }, "branches"},
 		{"zero items", func(c *Config) { c.Items = 0 }, "items"},
-		{"zero employees", func(c *Config) { c.EmployeesPerBranch = 0 }, "employees"},
-		{"too many employees", func(c *Config) { c.EmployeesPerBranch = 100 }, "employees"},
 		{"negative min sales", func(c *Config) { c.MinSalesPerDay = -1 }, "sales per day"},
 		{"max below min", func(c *Config) { c.MinSalesPerDay, c.MaxSalesPerDay = 5, 4 }, "sales per day"},
 		{"zero max sales", func(c *Config) { c.MinSalesPerDay, c.MaxSalesPerDay = 0, 0 }, "sales per day"},

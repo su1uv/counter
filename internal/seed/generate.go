@@ -29,22 +29,30 @@ func Generate(cfg Config) (Dataset, error) {
 }
 
 // generateSales walks the window day by day. Each branch's daily count
-// follows the calendar (see dailySales) and sale times follow the hourly
-// curve. Each sale is by a uniform employee of that branch. Folios run per
-// branch in time order.
+// follows its tier's base rate and the calendar (see dailySales), and sale
+// times follow the hourly curve. Each sale is by an employee on duty,
+// weighted by productivity. Folios run per branch in time order.
 func generateSales(r *rand.Rand, cfg Config, loc *time.Location, start time.Time, ds Dataset) []Sale {
 	staff := make([][]int, len(ds.Branches))
 	for i, e := range ds.Employees {
 		staff[e.Branch] = append(staff[e.Branch], i)
 	}
-	base := (cfg.MinSalesPerDay + cfg.MaxSalesPerDay + 1) / 2
+	base := make([]int, len(ds.Branches))
+	for b, branch := range ds.Branches {
+		base[b] = tierBase(r, cfg, tiers[branch.Tier])
+	}
 	folios := make([]int, len(ds.Branches))
 	end := start.AddDate(0, cfg.Months, 0)
 	var out []Sale
 	for day := start; day.Before(end); day = day.AddDate(0, 0, 1) {
 		y, m, d := day.Date()
 		for b, branch := range ds.Branches {
-			times := make([]int, dailySales(r, base, day))
+			duty := onDuty(ds.Employees, staff[b], day)
+			weights := make([]int, len(duty))
+			for i, e := range duty {
+				weights[i] = ds.Employees[e].Weight
+			}
+			times := make([]int, dailySales(r, base[b], day))
 			for i := range times {
 				times[i] = saleSecond(r)
 			}
@@ -54,7 +62,7 @@ func generateSales(r *rand.Rand, cfg Config, loc *time.Location, start time.Time
 				sale := Sale{
 					Folio:    fmt.Sprintf("%s-%06d", branch.Code, folios[b]),
 					Branch:   b,
-					Employee: staff[b][r.IntN(len(staff[b]))],
+					Employee: duty[weightedIndex(r, weights)],
 					SoldAt:   time.Date(y, m, d, 0, 0, sec, 0, loc),
 					Status:   "completed",
 					Lines:    generateLines(r, ds.Items),
@@ -158,27 +166,53 @@ func priceRange(category, material int) (lo, hi int64) {
 	return m.MinPesos, m.MaxPesos
 }
 
-// generateEmployees gives every branch one manager (the first employee)
-// and sellers, all hired between the branch opening and start.
+// generateEmployees staffs each branch by tier with one manager (the first
+// employee) and sellers, hired between the branch opening and start. A
+// seller may leave during the window; a replacement starts 3 to 20 days
+// later if that is still inside the window. The manager never leaves.
 func generateEmployees(r *rand.Rand, cfg Config, branches []Branch, start time.Time) []Employee {
-	out := make([]Employee, 0, len(branches)*cfg.EmployeesPerBranch)
+	end := start.AddDate(0, cfg.Months, 0)
+	window := int(end.Sub(start).Hours() / 24)
+	var out []Employee
 	for b, branch := range branches {
+		t := tiers[branch.Tier]
 		days := int(start.Sub(branch.OpenedOn).Hours() / 24)
-		for e := range cfg.EmployeesPerBranch {
+		n := t.MinStaff + r.IntN(t.MaxStaff-t.MinStaff+1)
+		var left []time.Time
+		for e := range n {
 			role := "seller"
 			if e == 0 {
 				role = "manager"
 			}
-			out = append(out, Employee{
-				Code:     fmt.Sprintf("%s-E%02d", branch.Code, e+1),
-				Branch:   b,
-				FullName: fullName(r),
-				Role:     role,
-				HiredOn:  branch.OpenedOn.AddDate(0, 0, r.IntN(days)),
-			})
+			emp := newEmployee(r, branch, b, e+1, role, branch.OpenedOn.AddDate(0, 0, r.IntN(days)))
+			if e > 0 && r.IntN(100) < departurePercent {
+				emp.TerminatedOn = start.AddDate(0, 0, r.IntN(window))
+				left = append(left, emp.TerminatedOn)
+			}
+			out = append(out, emp)
+		}
+		for _, on := range left {
+			if hired := on.AddDate(0, 0, 3+r.IntN(18)); hired.Before(end) {
+				n++
+				out = append(out, newEmployee(r, branch, b, n, "seller", hired))
+			}
 		}
 	}
 	return out
+}
+
+// newEmployee is the seq-th employee of branch b. The day off is Sunday to
+// Thursday, so nobody is off on the busy Friday and Saturday.
+func newEmployee(r *rand.Rand, branch Branch, b, seq int, role string, hired time.Time) Employee {
+	return Employee{
+		Code:     fmt.Sprintf("%s-E%02d", branch.Code, seq),
+		Branch:   b,
+		FullName: fullName(r),
+		Role:     role,
+		HiredOn:  hired,
+		Weight:   minWeight + r.IntN(maxWeight-minWeight+1),
+		DayOff:   time.Weekday(r.IntN(5)),
+	}
 }
 
 func fullName(r *rand.Rand) string {

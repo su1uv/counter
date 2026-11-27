@@ -2,6 +2,7 @@ package seed
 
 import (
 	"reflect"
+	"slices"
 	"testing"
 	"time"
 )
@@ -11,7 +12,6 @@ func smallConfig() Config {
 	cfg.Months = 1
 	cfg.Branches = 3
 	cfg.Items = 40
-	cfg.EmployeesPerBranch = 3
 	cfg.MinSalesPerDay = 1
 	cfg.MaxSalesPerDay = 4
 	return cfg
@@ -81,9 +81,6 @@ func TestGenerateCatalog(t *testing.T) {
 			if len(ds.Items) != cfg.Items {
 				t.Fatalf("items = %d, want %d", len(ds.Items), cfg.Items)
 			}
-			if want := cfg.Branches * cfg.EmployeesPerBranch; len(ds.Employees) != want {
-				t.Fatalf("employees = %d, want %d", len(ds.Employees), want)
-			}
 
 			codes := map[string]bool{}
 			unique := func(kind, code string) {
@@ -124,7 +121,10 @@ func TestGenerateCatalog(t *testing.T) {
 					t.Fatalf("incomplete item %+v", it)
 				}
 			}
+			end := start.AddDate(0, cfg.Months, 0)
 			managers := make([]int, len(ds.Branches))
+			initial := make([]int, len(ds.Branches))
+			departures, replacements := 0, 0
 			for _, e := range ds.Employees {
 				unique("employee", e.Code)
 				if e.Branch < 0 || e.Branch >= len(ds.Branches) {
@@ -133,22 +133,43 @@ func TestGenerateCatalog(t *testing.T) {
 				switch e.Role {
 				case "manager":
 					managers[e.Branch]++
+					if !e.TerminatedOn.IsZero() {
+						t.Fatalf("manager %s left", e.Code)
+					}
 				case "seller":
 				default:
 					t.Fatalf("employee %s has role %q", e.Code, e.Role)
 				}
 				opened := ds.Branches[e.Branch].OpenedOn
-				if e.HiredOn.Before(opened) || !e.HiredOn.Before(start) {
-					t.Fatalf("employee %s hired %v, outside [%v, %v)", e.Code, e.HiredOn, opened, start)
+				if e.HiredOn.Before(opened) || !e.HiredOn.Before(end) {
+					t.Fatalf("employee %s hired %v, outside [%v, %v)", e.Code, e.HiredOn, opened, end)
 				}
-				if e.FullName == "" {
-					t.Fatalf("employee %s has no name", e.Code)
+				if e.HiredOn.Before(start) {
+					initial[e.Branch]++
+				} else {
+					replacements++
+				}
+				if !e.TerminatedOn.IsZero() {
+					departures++
+					if e.TerminatedOn.Before(start) || !e.TerminatedOn.Before(end) || e.TerminatedOn.Before(e.HiredOn) {
+						t.Fatalf("employee %s hired %v left %v, outside the window", e.Code, e.HiredOn, e.TerminatedOn)
+					}
+				}
+				if e.FullName == "" || e.Weight < minWeight || e.Weight > maxWeight || e.DayOff > time.Thursday {
+					t.Fatalf("incomplete employee %+v", e)
 				}
 			}
 			for b, n := range managers {
 				if n != 1 {
 					t.Fatalf("branch %s has %d managers, want 1", ds.Branches[b].Code, n)
 				}
+				td := tiers[ds.Branches[b].Tier]
+				if initial[b] < td.MinStaff || initial[b] > td.MaxStaff {
+					t.Fatalf("branch %s starts with %d staff, want %d-%d", ds.Branches[b].Code, initial[b], td.MinStaff, td.MaxStaff)
+				}
+			}
+			if replacements > departures {
+				t.Fatalf("%d replacements for %d departures", replacements, departures)
 			}
 		})
 	}
@@ -180,6 +201,10 @@ func TestGenerateSales(t *testing.T) {
 				days++
 			}
 
+			staff := make([][]int, len(ds.Branches))
+			for i, e := range ds.Employees {
+				staff[e.Branch] = append(staff[e.Branch], i)
+			}
 			perBranchDay := map[string]int{}
 			folios := map[string]bool{}
 			lastAt := make([]time.Time, len(ds.Branches))
@@ -194,6 +219,9 @@ func TestGenerateSales(t *testing.T) {
 				}
 				if s.Employee < 0 || s.Employee >= len(ds.Employees) || ds.Employees[s.Employee].Branch != s.Branch {
 					t.Fatalf("sale %s has employee %d from another branch", s.Folio, s.Employee)
+				}
+				if duty := onDuty(ds.Employees, staff[s.Branch], dateOf(s.SoldAt)); !slices.Contains(duty, s.Employee) {
+					t.Fatalf("sale %s by employee %s, who is not on duty", s.Folio, ds.Employees[s.Employee].Code)
 				}
 				if s.Status != "completed" {
 					t.Fatalf("sale %s has status %q", s.Folio, s.Status)
@@ -328,5 +356,34 @@ func TestDateOf(t *testing.T) {
 	got := dateOf(time.Date(2026, 5, 1, 23, 30, 0, 0, loc))
 	if want := time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC); !got.Equal(want) {
 		t.Fatalf("dateOf = %v, want %v", got, want)
+	}
+}
+
+func TestBranchTiersAndStaff(t *testing.T) {
+	ds := mustGenerate(t, Default())
+	salesByTier := map[string]int{}
+	for _, s := range ds.Sales {
+		salesByTier[ds.Branches[s.Branch].Tier]++
+	}
+	branchesByTier := map[string]int{}
+	for _, b := range ds.Branches {
+		branchesByTier[b.Tier]++
+	}
+	perBranch := func(tier string) int { return salesByTier[tier] / branchesByTier[tier] }
+	if !(perBranch("large") > perBranch("medium") && perBranch("medium") > perBranch("small")) {
+		t.Fatalf("sales per branch: large %d, medium %d, small %d", perBranch("large"), perBranch("medium"), perBranch("small"))
+	}
+
+	departures, replacements := 0, 0
+	for _, e := range ds.Employees {
+		if !e.TerminatedOn.IsZero() {
+			departures++
+		}
+		if !e.HiredOn.Before(Default().Start) {
+			replacements++
+		}
+	}
+	if departures == 0 || replacements == 0 {
+		t.Fatalf("%d departures, %d replacements; want some of each", departures, replacements)
 	}
 }
