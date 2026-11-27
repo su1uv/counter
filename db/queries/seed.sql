@@ -46,6 +46,33 @@ INSERT INTO sale_return_lines (return_id, line_no, sale_line_id, quantity, refun
 VALUES ($1, $2, $3, $4, $5)
 RETURNING id;
 
+-- name: InsertSupplier :one
+INSERT INTO suppliers (code, name, city, lead_time_days)
+VALUES ($1, $2, $3, $4)
+RETURNING id;
+
+-- name: InsertPurchaseOrder :one
+INSERT INTO purchase_orders (folio, supplier_id, branch_id, ordered_at, received_at, status)
+VALUES ($1, $2, $3, $4, $5, $6)
+RETURNING id;
+
+-- name: InsertPurchaseOrderLine :one
+INSERT INTO purchase_order_lines (purchase_order_id, line_no, item_id, quantity, unit_cost_cents)
+VALUES ($1, $2, $3, $4, $5)
+RETURNING id;
+
+-- name: InsertInventoryMovement :one
+INSERT INTO inventory_movements (
+    branch_id, item_id, moved_at, kind, quantity, unit_cost_cents, reference,
+    sale_line_id, sale_return_line_id, purchase_order_line_id
+)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+RETURNING id;
+
+-- name: GetStockLevel :one
+SELECT quantity FROM stock_levels
+WHERE branch_id = $1 AND item_id = $2;
+
 -- name: CountSeedRows :one
 SELECT
     (SELECT count(*) FROM branches) AS branches,
@@ -56,7 +83,11 @@ SELECT
     (SELECT count(*) FROM sale_lines) AS sale_lines,
     (SELECT count(*) FROM sale_payments) AS sale_payments,
     (SELECT count(*) FROM sale_returns) AS sale_returns,
-    (SELECT count(*) FROM sale_return_lines) AS sale_return_lines;
+    (SELECT count(*) FROM sale_return_lines) AS sale_return_lines,
+    (SELECT count(*) FROM suppliers) AS suppliers,
+    (SELECT count(*) FROM purchase_orders) AS purchase_orders,
+    (SELECT count(*) FROM purchase_order_lines) AS purchase_order_lines,
+    (SELECT count(*) FROM inventory_movements) AS inventory_movements;
 
 -- name: ResetSeedData :exec
 TRUNCATE inventory_movements, purchase_order_lines, purchase_orders, suppliers,

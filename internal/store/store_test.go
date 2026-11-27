@@ -131,10 +131,99 @@ func TestSeedQueries(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := q.InsertSaleReturnLine(ctx, store.InsertSaleReturnLineParams{
+	returnLineID, err := q.InsertSaleReturnLine(ctx, store.InsertSaleReturnLineParams{
 		ReturnID: returnID, LineNo: 1, SaleLineID: lineID, Quantity: 1, RefundCents: 1000000,
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatal(err)
+	}
+
+	supplierID, err := q.InsertSupplier(ctx, store.InsertSupplierParams{
+		Code: "PR01", Name: "Oro Fino de Guadalajara", City: "Guadalajara", LeadTimeDays: 5,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	orderID, err := q.InsertPurchaseOrder(ctx, store.InsertPurchaseOrderParams{
+		Folio: "OC-S01-000001", SupplierID: supplierID, BranchID: branchID, OrderedAt: day.Add(-48 * time.Hour),
+		ReceivedAt: sql.NullTime{Time: day.Add(10 * time.Hour), Valid: true}, Status: "received",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	orderLineID, err := q.InsertPurchaseOrderLine(ctx, store.InsertPurchaseOrderLineParams{
+		PurchaseOrderID: orderID, LineNo: 1, ItemID: itemID, Quantity: 2, UnitCostCents: 400000,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref := func(id int64) sql.NullInt64 { return sql.NullInt64{Int64: id, Valid: true} }
+	movement := func(kind string, qty int32) store.InsertInventoryMovementParams {
+		return store.InsertInventoryMovementParams{
+			BranchID: branchID, ItemID: itemID, MovedAt: day, Kind: kind, Quantity: qty,
+			UnitCostCents: 400000, Reference: "REF",
+		}
+	}
+	withRef := func(p store.InsertInventoryMovementParams, set func(*store.InsertInventoryMovementParams)) store.InsertInventoryMovementParams {
+		set(&p)
+		return p
+	}
+	movements := []store.InsertInventoryMovementParams{
+		movement("opening", 3),
+		withRef(movement("receipt", 2), func(p *store.InsertInventoryMovementParams) { p.PurchaseOrderLineID = ref(orderLineID) }),
+		withRef(movement("sale", -1), func(p *store.InsertInventoryMovementParams) { p.SaleLineID = ref(lineID) }),
+		withRef(movement("return", 1), func(p *store.InsertInventoryMovementParams) { p.SaleReturnLineID = ref(returnLineID) }),
+		movement("transfer_out", -2),
+		movement("transfer_in", 1),
+		movement("adjustment", -1),
+	}
+	// Rejected rows go first, so the unique source-line columns cannot mask
+	// the checks under test.
+	rejectedMovements := []struct {
+		name string
+		p    store.InsertInventoryMovementParams
+	}{
+		{"positive sale", withRef(movement("sale", 1), func(p *store.InsertInventoryMovementParams) { p.SaleLineID = ref(lineID) })},
+		{"sale without line", movement("sale", -1)},
+		{"receipt without order line", movement("receipt", 1)},
+		{"return without return line", movement("return", 1)},
+		{"opening with sale line", withRef(movement("opening", 1), func(p *store.InsertInventoryMovementParams) { p.SaleLineID = ref(lineID) })},
+		{"negative opening", movement("opening", -1)},
+		{"positive transfer out", movement("transfer_out", 1)},
+		{"zero adjustment", movement("adjustment", 0)},
+		{"unknown kind", movement("theft", -1)},
+	}
+	for _, r := range rejectedMovements {
+		if _, err := q.InsertInventoryMovement(ctx, r.p); err == nil {
+			t.Fatalf("InsertInventoryMovement(%s) succeeded, want a check violation", r.name)
+		}
+	}
+	for _, m := range movements {
+		if _, err := q.InsertInventoryMovement(ctx, m); err != nil {
+			t.Fatalf("InsertInventoryMovement(%s): %v", m.Kind, err)
+		}
+	}
+	if _, err := q.InsertInventoryMovement(ctx, movements[2]); err == nil {
+		t.Fatal("second movement for one sale line succeeded, want a unique violation")
+	}
+	if got, err := q.GetStockLevel(ctx, store.GetStockLevelParams{BranchID: branchID, ItemID: itemID}); err != nil || got != 3 {
+		t.Fatalf("GetStockLevel = %d, %v; want 3", got, err)
+	}
+	rejectedOrders := []struct {
+		name string
+		p    store.InsertPurchaseOrderParams
+	}{
+		{"received without date", store.InsertPurchaseOrderParams{Folio: "OC-X1", SupplierID: supplierID, BranchID: branchID,
+			OrderedAt: day, Status: "received"}},
+		{"open with date", store.InsertPurchaseOrderParams{Folio: "OC-X2", SupplierID: supplierID, BranchID: branchID,
+			OrderedAt: day, ReceivedAt: sql.NullTime{Time: day.Add(time.Hour), Valid: true}, Status: "ordered"}},
+		{"received before ordered", store.InsertPurchaseOrderParams{Folio: "OC-X3", SupplierID: supplierID, BranchID: branchID,
+			OrderedAt: day, ReceivedAt: sql.NullTime{Time: day.Add(-time.Hour), Valid: true}, Status: "received"}},
+	}
+	for _, r := range rejectedOrders {
+		if _, err := q.InsertPurchaseOrder(ctx, r.p); err == nil {
+			t.Fatalf("InsertPurchaseOrder(%s) succeeded, want a check violation", r.name)
+		}
 	}
 
 	got, err := q.CountSeedRows(ctx)
@@ -144,6 +233,7 @@ func TestSeedQueries(t *testing.T) {
 	want := store.CountSeedRowsRow{
 		Branches: 1, Categories: 1, Items: 1, Employees: 1, Sales: 1, SaleLines: 1,
 		SalePayments: 2, SaleReturns: 1, SaleReturnLines: 1,
+		Suppliers: 1, PurchaseOrders: 1, PurchaseOrderLines: 1, InventoryMovements: int64(len(movements)),
 	}
 	if got != want {
 		t.Fatalf("CountSeedRows = %+v, want %+v", got, want)
