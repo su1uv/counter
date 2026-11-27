@@ -62,7 +62,8 @@ func fingerprint(t *testing.T, db *sql.DB) string {
 		(SELECT md5(string_agg(t::text, '|' ORDER BY id)) FROM inventory_movements t),
 		(SELECT md5(string_agg(t::text, '|' ORDER BY id)) FROM cash_registers t),
 		(SELECT md5(string_agg(t::text, '|' ORDER BY id)) FROM register_shifts t),
-		(SELECT md5(string_agg(t::text, '|' ORDER BY id)) FROM cash_movements t))`).Scan(&fp)
+		(SELECT md5(string_agg(t::text, '|' ORDER BY id)) FROM cash_movements t),
+		(SELECT md5(string_agg(t::text, '|' ORDER BY id)) FROM customers t))`).Scan(&fp)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -143,9 +144,10 @@ func TestWrite(t *testing.T) {
 		CashRegisters:      int64(len(ds.Registers)),
 		RegisterShifts:     int64(len(ds.Shifts)),
 		CashMovements:      int64(len(ds.CashMovements)),
+		Customers:          int64(len(ds.Customers)),
 	}
-	if want.SaleReturns == 0 || want.RegisterShifts == 0 {
-		t.Fatal("small dataset has no returns or shifts to write")
+	if want.SaleReturns == 0 || want.RegisterShifts == 0 || want.Customers == 0 {
+		t.Fatal("small dataset has no returns, shifts or customers to write")
 	}
 	if got != want {
 		t.Fatalf("CountSeedRows = %+v, want %+v", got, want)
@@ -244,6 +246,12 @@ func TestWrite(t *testing.T) {
 		{"cash movement is inside its shift", `SELECT count(*) FROM cash_movements m
 			JOIN register_shifts sh ON sh.id = m.shift_id
 			WHERE m.moved_at < sh.opened_at OR m.moved_at >= sh.closed_at`},
+		{"público en general is the generic receptor", `SELECT count(*) FROM customers
+			WHERE id = 1 AND (rfc <> 'XAXX010101000' OR tax_regime <> '616')`},
+		{"customer regime matches the rfc length", `SELECT count(*) FROM customers WHERE
+			(tax_regime = '616' AND rfc <> 'XAXX010101000')
+			OR (tax_regime = '612' AND length(rfc) <> 13)
+			OR (tax_regime = '601' AND length(rfc) <> 12)`},
 	})
 
 	first := fingerprint(t, db)
@@ -292,6 +300,7 @@ func TestWriteErrors(t *testing.T) {
 		{"register", func(ds *Dataset) { ds.Registers[1].Code = ds.Registers[0].Code }},
 		{"shift", func(ds *Dataset) { ds.Shifts[0].ClosedAt = ds.Shifts[0].OpenedAt }},
 		{"cash movement", func(ds *Dataset) { ds.CashMovements[0].Kind = "theft" }},
+		{"customer", func(ds *Dataset) { ds.Customers[1].Code = ds.Customers[0].Code }},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

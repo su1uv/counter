@@ -18,6 +18,17 @@ type Dataset struct {
 	PurchaseOrders []PurchaseOrder
 	Movements      []Movement
 	CashMovements  []CashMovement
+	Customers      []Customer
+}
+
+// Customer is a CFDI receptor. RFC is a fictional Mexican tax id. The first
+// customer is Público en general.
+type Customer struct {
+	Code       string
+	RFC        string
+	LegalName  string
+	TaxRegime  string // "601", "612" or "616"
+	PostalCode string
 }
 
 type Supplier struct {

@@ -208,5 +208,13 @@ func insert(ctx context.Context, q *store.Queries, ds Dataset) error {
 			return fmt.Errorf("insert %s from shift %d: %w", m.Kind, m.Shift, err)
 		}
 	}
+
+	for _, c := range ds.Customers {
+		if _, err := q.InsertCustomer(ctx, store.InsertCustomerParams{
+			Code: c.Code, Rfc: c.RFC, LegalName: c.LegalName, TaxRegime: c.TaxRegime, PostalCode: c.PostalCode,
+		}); err != nil {
+			return fmt.Errorf("insert customer %s: %w", c.Code, err)
+		}
+	}
 	return nil
 }
