@@ -317,7 +317,8 @@ func (q *Queries) InsertSaleReturnLine(ctx context.Context, arg InsertSaleReturn
 }
 
 const resetSeedData = `-- name: ResetSeedData :exec
-TRUNCATE sale_return_lines, sale_returns, sale_payments,
+TRUNCATE inventory_movements, purchase_order_lines, purchase_orders, suppliers,
+    sale_return_lines, sale_returns, sale_payments,
     sale_lines, sales, employees, items, categories, branches RESTART IDENTITY
 `
 
