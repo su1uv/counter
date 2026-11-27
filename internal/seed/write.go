@@ -74,6 +74,7 @@ func insert(ctx context.Context, q *store.Queries, ds Dataset) error {
 		saleID, err := q.InsertSale(ctx, store.InsertSaleParams{
 			Folio: s.Folio, BranchID: branchIDs[s.Branch], EmployeeID: employeeIDs[s.Employee], SoldAt: s.SoldAt,
 			Status: s.Status, SubtotalCents: s.SubtotalCents, TaxCents: s.TaxCents, TotalCents: s.TotalCents,
+			ShiftID: sql.NullInt64{},
 		})
 		if err != nil {
 			return fmt.Errorf("insert sale %s: %w", s.Folio, err)

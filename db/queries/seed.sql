@@ -19,8 +19,8 @@ VALUES ($1, $2, $3, $4, $5, $6)
 RETURNING id;
 
 -- name: InsertSale :one
-INSERT INTO sales (folio, branch_id, employee_id, sold_at, status, subtotal_cents, tax_cents, total_cents)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+INSERT INTO sales (folio, branch_id, employee_id, sold_at, status, subtotal_cents, tax_cents, total_cents, shift_id)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 RETURNING id;
 
 -- name: InsertSaleLine :one
@@ -61,6 +61,24 @@ INSERT INTO purchase_order_lines (purchase_order_id, line_no, item_id, quantity,
 VALUES ($1, $2, $3, $4, $5)
 RETURNING id;
 
+-- name: InsertCashRegister :one
+INSERT INTO cash_registers (branch_id, code, name)
+VALUES ($1, $2, $3)
+RETURNING id;
+
+-- name: InsertRegisterShift :one
+INSERT INTO register_shifts (
+    register_id, opened_by, opened_at, closed_at,
+    opening_float_cents, expected_cash_cents, counted_cash_cents
+)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
+RETURNING id;
+
+-- name: InsertCashMovement :one
+INSERT INTO cash_movements (shift_id, moved_at, kind, amount_cents, note)
+VALUES ($1, $2, $3, $4, $5)
+RETURNING id;
+
 -- name: InsertInventoryMovement :one
 INSERT INTO inventory_movements (
     branch_id, item_id, moved_at, kind, quantity, unit_cost_cents, reference,
@@ -87,9 +105,13 @@ SELECT
     (SELECT count(*) FROM suppliers) AS suppliers,
     (SELECT count(*) FROM purchase_orders) AS purchase_orders,
     (SELECT count(*) FROM purchase_order_lines) AS purchase_order_lines,
-    (SELECT count(*) FROM inventory_movements) AS inventory_movements;
+    (SELECT count(*) FROM inventory_movements) AS inventory_movements,
+    (SELECT count(*) FROM cash_registers) AS cash_registers,
+    (SELECT count(*) FROM register_shifts) AS register_shifts,
+    (SELECT count(*) FROM cash_movements) AS cash_movements;
 
 -- name: ResetSeedData :exec
-TRUNCATE inventory_movements, purchase_order_lines, purchase_orders, suppliers,
+TRUNCATE cash_movements, register_shifts, cash_registers,
+    inventory_movements, purchase_order_lines, purchase_orders, suppliers,
     sale_return_lines, sale_returns, sale_payments,
     sale_lines, sales, employees, items, categories, branches RESTART IDENTITY;

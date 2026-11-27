@@ -20,6 +20,22 @@ type Branch struct {
 	Tier     string
 }
 
+type CashMovement struct {
+	ID          int64
+	ShiftID     int64
+	MovedAt     time.Time
+	Kind        string
+	AmountCents int64
+	Note        string
+}
+
+type CashRegister struct {
+	ID       int64
+	BranchID int64
+	Code     string
+	Name     string
+}
+
 type Category struct {
 	ID   int64
 	Code string
@@ -80,6 +96,17 @@ type PurchaseOrderLine struct {
 	UnitCostCents   int64
 }
 
+type RegisterShift struct {
+	ID                int64
+	RegisterID        int64
+	OpenedBy          int64
+	OpenedAt          time.Time
+	ClosedAt          time.Time
+	OpeningFloatCents int64
+	ExpectedCashCents int64
+	CountedCashCents  int64
+}
+
 type Sale struct {
 	ID            int64
 	Folio         string
@@ -90,6 +117,7 @@ type Sale struct {
 	TaxCents      int64
 	TotalCents    int64
 	Status        string
+	ShiftID       sql.NullInt64
 }
 
 type SaleLine struct {
