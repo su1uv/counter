@@ -17,7 +17,9 @@ type Dataset struct {
 
 // Movement is one row of the inventory ledger, in the branch's zone.
 // Quantity is signed: sales and transfers out are negative. Reference is
-// the business code of the source document.
+// the business code of the source document. Doc and Line locate the source
+// line of sale movements (Dataset.Sales) and return movements
+// (Dataset.Returns); other kinds leave them zero.
 type Movement struct {
 	Branch        int // index into Dataset.Branches
 	Item          int // index into Dataset.Items
@@ -26,6 +28,7 @@ type Movement struct {
 	Quantity      int
 	UnitCostCents int64
 	Reference     string
+	Doc, Line     int
 }
 
 type Branch struct {

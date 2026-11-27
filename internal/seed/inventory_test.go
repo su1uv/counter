@@ -39,6 +39,77 @@ func TestStockPolicies(t *testing.T) {
 	}
 }
 
+// TestLedgerMatchesSalesAndReturns checks that every completed sale line
+// takes stock once, every return line puts it back once, and nothing else
+// does.
+func TestLedgerMatchesSalesAndReturns(t *testing.T) {
+	tests := []struct {
+		name string
+		cfg  Config
+	}{
+		{"small", smallConfig()},
+		{"default", Default()},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ds := mustGenerate(t, tt.cfg)
+			sold := make([][]int, len(ds.Sales))
+			for i, s := range ds.Sales {
+				sold[i] = make([]int, len(s.Lines))
+			}
+			returned := make([][]int, len(ds.Returns))
+			for i, ret := range ds.Returns {
+				returned[i] = make([]int, len(ret.Lines))
+			}
+			var last time.Time
+			for _, m := range ds.Movements {
+				switch m.Kind {
+				case "sale":
+					s := ds.Sales[m.Doc]
+					l := s.Lines[m.Line]
+					if s.Status != "completed" || m.Branch != s.Branch || m.Item != l.Item || m.Quantity != -l.Quantity ||
+						!m.MovedAt.Equal(s.SoldAt) || m.UnitCostCents != l.UnitCostCents || m.Reference != s.Folio {
+						t.Fatalf("sale movement %+v does not match %s line %+v", m, s.Folio, l)
+					}
+					sold[m.Doc][m.Line]++
+				case "return":
+					ret := ds.Returns[m.Doc]
+					rl := ret.Lines[m.Line]
+					s := ds.Sales[ret.Sale]
+					l := s.Lines[rl.SaleLine]
+					if m.Branch != s.Branch || m.Item != l.Item || m.Quantity != rl.Quantity ||
+						!m.MovedAt.Equal(ret.ReturnedAt) || m.UnitCostCents != l.UnitCostCents || m.Reference != ret.Folio {
+						t.Fatalf("return movement %+v does not match %s line %+v", m, ret.Folio, rl)
+					}
+					returned[m.Doc][m.Line]++
+				}
+				if dateOf(m.MovedAt).Before(dateOf(last)) {
+					t.Fatalf("movement %+v is on a day before the previous movement at %v", m, last)
+				}
+				last = m.MovedAt
+			}
+			for i, s := range ds.Sales {
+				want := 0
+				if s.Status == "completed" {
+					want = 1
+				}
+				for j, n := range sold[i] {
+					if n != want {
+						t.Fatalf("%s sale %s line %d has %d sale movements, want %d", s.Status, s.Folio, j+1, n, want)
+					}
+				}
+			}
+			for i, ret := range ds.Returns {
+				for j, n := range returned[i] {
+					if n != 1 {
+						t.Fatalf("return %s line %d has %d return movements, want 1", ret.Folio, j+1, n)
+					}
+				}
+			}
+		})
+	}
+}
+
 func TestOpeningStock(t *testing.T) {
 	tests := []struct {
 		name string

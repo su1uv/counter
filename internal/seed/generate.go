@@ -27,8 +27,7 @@ func Generate(cfg Config) (Dataset, error) {
 	base, mix := branchDemand(r, cfg, ds.Branches, ds.Items)
 	policies := stockPolicies(base, mix)
 	ds.Movements = openingStock(ds, policies, time.Date(start.Year(), start.Month(), start.Day(), 0, 0, 0, 0, loc))
-	ds.Sales = generateSales(r, cfg, loc, start, ds, base, mix)
-	ds.Returns = generateReturns(r, cfg, loc, start, ds)
+	newSimulation(r, cfg, loc, start, &ds, base, mix).run(start)
 	return ds, nil
 }
 
@@ -42,71 +41,6 @@ func branchDemand(r *rand.Rand, cfg Config, branches []Branch, items []Item) (ba
 		mix[b] = itemWeights(tiers[branch.Tier], items)
 	}
 	return base, mix
-}
-
-// staffByBranch lists each branch's employees as indexes into employees.
-func staffByBranch(branches []Branch, employees []Employee) [][]int {
-	staff := make([][]int, len(branches))
-	for i, e := range employees {
-		staff[e.Branch] = append(staff[e.Branch], i)
-	}
-	return staff
-}
-
-// pickOnDuty picks one of the staff on duty on day, weighted by
-// productivity.
-func pickOnDuty(r *rand.Rand, employees []Employee, staff []int, day time.Time) int {
-	duty := onDuty(employees, staff, day)
-	weights := make([]int, len(duty))
-	for i, e := range duty {
-		weights[i] = employees[e].Weight
-	}
-	return duty[weightedIndex(r, weights)]
-}
-
-// generateSales walks the window day by day. Each branch's daily count
-// follows its tier's base rate and the calendar (see dailySales), and sale
-// times follow the hourly curve. Each sale is by an employee on duty,
-// weighted by productivity. Folios run per branch in time order. A few
-// sales are cancelled the same day; they keep their lines but have no
-// payments.
-func generateSales(r *rand.Rand, cfg Config, loc *time.Location, start time.Time, ds Dataset, base []int, mix [][]int) []Sale {
-	staff := staffByBranch(ds.Branches, ds.Employees)
-	folios := make([]int, len(ds.Branches))
-	end := start.AddDate(0, cfg.Months, 0)
-	var out []Sale
-	for day := start; day.Before(end); day = day.AddDate(0, 0, 1) {
-		y, m, d := day.Date()
-		for b, branch := range ds.Branches {
-			times := make([]int, dailySales(r, base[b], day))
-			for i := range times {
-				times[i] = saleSecond(r)
-			}
-			slices.Sort(times)
-			for _, sec := range times {
-				folios[b]++
-				sale := Sale{
-					Folio:    fmt.Sprintf("%s-%06d", branch.Code, folios[b]),
-					Branch:   b,
-					Employee: pickOnDuty(r, ds.Employees, staff[b], day),
-					SoldAt:   time.Date(y, m, d, 0, 0, sec, 0, loc),
-					Status:   "completed",
-					Lines:    generateLines(r, ds.Items, mix[b]),
-				}
-				for _, l := range sale.Lines {
-					sale.TotalCents += l.TotalCents
-				}
-				sale.SubtotalCents, sale.TaxCents = SplitTax(sale.TotalCents, ivaBP)
-				if r.IntN(1000) < cancelPerMille {
-					sale.Status = "cancelled"
-				} else {
-					sale.Payments = generatePayments(r, sale.TotalCents)
-				}
-				out = append(out, sale)
-			}
-		}
-	}
-	return out
 }
 
 // Basket shape. Index i of basketWeights is the weight of i+1 lines, and

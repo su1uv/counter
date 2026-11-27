@@ -162,6 +162,19 @@ func TestWrite(t *testing.T) {
 			WHERE NOT EXISTS (SELECT 1 FROM stock_levels s WHERE s.branch_id = b.id AND s.item_id = i.id)`},
 		{"movement cost matches item cost", `SELECT count(*) FROM inventory_movements m
 			JOIN items i ON i.id = m.item_id WHERE m.unit_cost_cents <> i.unit_cost_cents`},
+		{"one sale movement per completed sale line, none for cancelled", `SELECT count(*) FROM sale_lines l
+			JOIN sales s ON s.id = l.sale_id LEFT JOIN inventory_movements m ON m.sale_line_id = l.id
+			WHERE (s.status = 'completed') <> (m.id IS NOT NULL)
+			OR m.quantity <> -l.quantity OR m.item_id <> l.item_id OR m.branch_id <> s.branch_id OR m.moved_at <> s.sold_at`},
+		{"ledger sale quantity equals completed sale lines", `SELECT count(*) FROM (SELECT
+			(SELECT -sum(quantity) FROM inventory_movements WHERE kind = 'sale') AS ledger,
+			(SELECT sum(l.quantity) FROM sale_lines l JOIN sales s ON s.id = l.sale_id WHERE s.status = 'completed') AS sold) x
+			WHERE ledger <> sold`},
+		{"one return movement per return line", `SELECT count(*) FROM sale_return_lines rl
+			JOIN sale_returns r ON r.id = rl.return_id JOIN sale_lines l ON l.id = rl.sale_line_id
+			JOIN sales s ON s.id = r.sale_id LEFT JOIN inventory_movements m ON m.sale_return_line_id = rl.id
+			WHERE m.id IS NULL OR m.quantity <> rl.quantity OR m.item_id <> l.item_id
+			OR m.branch_id <> s.branch_id OR m.moved_at <> r.returned_at`},
 	})
 
 	first := fingerprint(t, db)
