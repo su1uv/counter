@@ -42,6 +42,15 @@ type Category struct {
 	Name string
 }
 
+type Customer struct {
+	ID         int64
+	Code       string
+	Rfc        string
+	LegalName  string
+	TaxRegime  string
+	PostalCode string
+}
+
 type Employee struct {
 	ID           int64
 	Code         string
@@ -64,6 +73,17 @@ type InventoryMovement struct {
 	SaleLineID          sql.NullInt64
 	SaleReturnLineID    sql.NullInt64
 	PurchaseOrderLineID sql.NullInt64
+}
+
+type Invoice struct {
+	ID            int64
+	SaleID        int64
+	CustomerID    int64
+	Uuid          string
+	CfdiUse       string
+	PaymentForm   string
+	PaymentMethod string
+	IssuedAt      time.Time
 }
 
 type Item struct {

@@ -280,6 +280,49 @@ func TestSeedQueries(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	customerID, err := q.InsertCustomer(ctx, store.InsertCustomerParams{
+		Code: "C0001", Rfc: "XAXX010101000", LegalName: "Público en general",
+		TaxRegime: "616", PostalCode: "06000",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rejectedCustomers := []struct {
+		name string
+		p    store.InsertCustomerParams
+	}{
+		{"bad rfc", store.InsertCustomerParams{Code: "C0002", Rfc: "not-an-rfc", LegalName: "Ana López", TaxRegime: "612", PostalCode: "11560"}},
+		{"bad regime", store.InsertCustomerParams{Code: "C0002", Rfc: "LOGL900315AB1", LegalName: "Ana López", TaxRegime: "999", PostalCode: "11560"}},
+		{"bad postal code", store.InsertCustomerParams{Code: "C0002", Rfc: "LOGL900315AB1", LegalName: "Ana López", TaxRegime: "612", PostalCode: "1156"}},
+		{"duplicate rfc", store.InsertCustomerParams{Code: "C0002", Rfc: "XAXX010101000", LegalName: "Otra", TaxRegime: "616", PostalCode: "06000"}},
+	}
+	for _, r := range rejectedCustomers {
+		if _, err := q.InsertCustomer(ctx, r.p); err == nil {
+			t.Fatalf("InsertCustomer(%s) succeeded, want a violation", r.name)
+		}
+	}
+	if _, err := q.InsertInvoice(ctx, store.InsertInvoiceParams{
+		SaleID: saleID, CustomerID: customerID, Uuid: "11111111-1111-4111-8111-111111111111",
+		CfdiUse: "S01", PaymentForm: "04", PaymentMethod: "PUE", IssuedAt: day.Add(12 * time.Hour),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	rejectedInvoices := []struct {
+		name string
+		p    store.InsertInvoiceParams
+	}{
+		{"bad use", store.InsertInvoiceParams{SaleID: saleID, CustomerID: customerID, Uuid: "22222222-2222-4222-8222-222222222222", CfdiUse: "D01", PaymentForm: "01", PaymentMethod: "PUE", IssuedAt: day}},
+		{"bad form", store.InsertInvoiceParams{SaleID: saleID, CustomerID: customerID, Uuid: "22222222-2222-4222-8222-222222222222", CfdiUse: "G03", PaymentForm: "99", PaymentMethod: "PUE", IssuedAt: day}},
+		{"deferred payment", store.InsertInvoiceParams{SaleID: saleID, CustomerID: customerID, Uuid: "22222222-2222-4222-8222-222222222222", CfdiUse: "G03", PaymentForm: "01", PaymentMethod: "PPD", IssuedAt: day}},
+		{"bad uuid", store.InsertInvoiceParams{SaleID: saleID, CustomerID: customerID, Uuid: "not-a-uuid", CfdiUse: "G03", PaymentForm: "01", PaymentMethod: "PUE", IssuedAt: day}},
+		{"second invoice for the sale", store.InsertInvoiceParams{SaleID: saleID, CustomerID: customerID, Uuid: "22222222-2222-4222-8222-222222222222", CfdiUse: "S01", PaymentForm: "01", PaymentMethod: "PUE", IssuedAt: day}},
+	}
+	for _, r := range rejectedInvoices {
+		if _, err := q.InsertInvoice(ctx, r.p); err == nil {
+			t.Fatalf("InsertInvoice(%s) succeeded, want a check violation", r.name)
+		}
+	}
+
 	got, err := q.CountSeedRows(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -289,6 +332,7 @@ func TestSeedQueries(t *testing.T) {
 		SalePayments: 2, SaleReturns: 1, SaleReturnLines: 1,
 		Suppliers: 1, PurchaseOrders: 1, PurchaseOrderLines: 1, InventoryMovements: int64(len(movements)),
 		CashRegisters: 1, RegisterShifts: 1, CashMovements: 1,
+		Customers: 1, Invoices: 1,
 	}
 	if got != want {
 		t.Fatalf("CountSeedRows = %+v, want %+v", got, want)
