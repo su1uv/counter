@@ -27,7 +27,7 @@ func insert(ctx context.Context, q *store.Queries, ds Dataset) error {
 	for i, b := range ds.Branches {
 		id, err := q.InsertBranch(ctx, store.InsertBranchParams{
 			Code: b.Code, Name: b.Name, City: b.City, State: b.State,
-			Timezone: b.Timezone, OpenedOn: b.OpenedOn,
+			Timezone: b.Timezone, OpenedOn: b.OpenedOn, Tier: b.Tier,
 		})
 		if err != nil {
 			return fmt.Errorf("insert branch %s: %w", b.Code, err)
@@ -60,6 +60,7 @@ func insert(ctx context.Context, q *store.Queries, ds Dataset) error {
 	for i, e := range ds.Employees {
 		id, err := q.InsertEmployee(ctx, store.InsertEmployeeParams{
 			Code: e.Code, BranchID: branchIDs[e.Branch], FullName: e.FullName, Role: e.Role, HiredOn: e.HiredOn,
+			TerminatedOn: sql.NullTime{Time: e.TerminatedOn, Valid: !e.TerminatedOn.IsZero()},
 		})
 		if err != nil {
 			return fmt.Errorf("insert employee %s: %w", e.Code, err)
@@ -67,21 +68,54 @@ func insert(ctx context.Context, q *store.Queries, ds Dataset) error {
 		employeeIDs[i] = id
 	}
 
-	for _, s := range ds.Sales {
+	saleIDs := make([]int64, len(ds.Sales))
+	lineIDs := make([][]int64, len(ds.Sales))
+	for i, s := range ds.Sales {
 		saleID, err := q.InsertSale(ctx, store.InsertSaleParams{
 			Folio: s.Folio, BranchID: branchIDs[s.Branch], EmployeeID: employeeIDs[s.Employee], SoldAt: s.SoldAt,
-			SubtotalCents: s.SubtotalCents, TaxCents: s.TaxCents, TotalCents: s.TotalCents,
+			Status: s.Status, SubtotalCents: s.SubtotalCents, TaxCents: s.TaxCents, TotalCents: s.TotalCents,
 		})
 		if err != nil {
 			return fmt.Errorf("insert sale %s: %w", s.Folio, err)
 		}
-		for _, l := range s.Lines {
-			if _, err := q.InsertSaleLine(ctx, store.InsertSaleLineParams{
+		saleIDs[i] = saleID
+		lineIDs[i] = make([]int64, len(s.Lines))
+		for j, l := range s.Lines {
+			lineID, err := q.InsertSaleLine(ctx, store.InsertSaleLineParams{
 				SaleID: saleID, LineNo: int32(l.LineNo), ItemID: itemIDs[l.Item], Quantity: int32(l.Quantity),
 				UnitPriceCents: l.UnitPriceCents, UnitCostCents: l.UnitCostCents,
 				DiscountCents: l.DiscountCents, TotalCents: l.TotalCents,
-			}); err != nil {
+			})
+			if err != nil {
 				return fmt.Errorf("insert sale %s line %d: %w", s.Folio, l.LineNo, err)
+			}
+			lineIDs[i][j] = lineID
+		}
+		for _, p := range s.Payments {
+			if _, err := q.InsertSalePayment(ctx, store.InsertSalePaymentParams{
+				SaleID: saleID, Method: p.Method, AmountCents: p.AmountCents,
+				CardBrand: sql.NullString{String: p.CardBrand, Valid: p.CardBrand != ""},
+				Last4:     sql.NullString{String: p.Last4, Valid: p.Last4 != ""},
+			}); err != nil {
+				return fmt.Errorf("insert sale %s %s payment: %w", s.Folio, p.Method, err)
+			}
+		}
+	}
+
+	for _, ret := range ds.Returns {
+		returnID, err := q.InsertSaleReturn(ctx, store.InsertSaleReturnParams{
+			Folio: ret.Folio, SaleID: saleIDs[ret.Sale], EmployeeID: employeeIDs[ret.Employee], ReturnedAt: ret.ReturnedAt,
+			SubtotalCents: ret.SubtotalCents, TaxCents: ret.TaxCents, TotalCents: ret.TotalCents,
+		})
+		if err != nil {
+			return fmt.Errorf("insert return %s: %w", ret.Folio, err)
+		}
+		for _, l := range ret.Lines {
+			if _, err := q.InsertSaleReturnLine(ctx, store.InsertSaleReturnLineParams{
+				ReturnID: returnID, LineNo: int32(l.LineNo), SaleLineID: lineIDs[ret.Sale][l.SaleLine],
+				Quantity: int32(l.Quantity), RefundCents: l.RefundCents,
+			}); err != nil {
+				return fmt.Errorf("insert return %s line %d: %w", ret.Folio, l.LineNo, err)
 			}
 		}
 	}

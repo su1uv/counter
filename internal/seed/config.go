@@ -10,38 +10,35 @@ import (
 	_ "time/tzdata" // branch zones must not depend on the OS zone database
 )
 
-const (
-	maxBranches           = 15
-	maxEmployeesPerBranch = 99
-)
+const maxBranches = 15
 
 // Config controls what Generate produces. The same Config always produces
 // the same Dataset.
 type Config struct {
-	Seed               uint64
-	Start              time.Time // first day of the window; only the date is used
-	Months             int
-	Timezone           string
-	Branches           int
-	Items              int
-	EmployeesPerBranch int
-	MinSalesPerDay     int // per branch
-	MaxSalesPerDay     int // per branch
+	Seed     uint64
+	Start    time.Time // first day of the window; only the date is used
+	Months   int
+	Timezone string
+	Branches int
+	Items    int
+	// Each branch's base daily sales fall in this range by tier, before
+	// calendar effects. Staff per branch also comes from the tier.
+	MinSalesPerDay int
+	MaxSalesPerDay int
 }
 
 // Default returns the full-size configuration: 15 branches and six whole
 // months starting 2026-05-01.
 func Default() Config {
 	return Config{
-		Seed:               1,
-		Start:              time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC),
-		Months:             6,
-		Timezone:           "America/Mexico_City",
-		Branches:           maxBranches,
-		Items:              300,
-		EmployeesPerBranch: 4,
-		MinSalesPerDay:     15,
-		MaxSalesPerDay:     45,
+		Seed:           1,
+		Start:          time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC),
+		Months:         6,
+		Timezone:       "America/Mexico_City",
+		Branches:       maxBranches,
+		Items:          300,
+		MinSalesPerDay: 15,
+		MaxSalesPerDay: 50,
 	}
 }
 
@@ -59,9 +56,6 @@ func (c Config) Validate() error {
 	}
 	if c.Items < 1 {
 		errs = append(errs, errors.New("items must be at least 1"))
-	}
-	if c.EmployeesPerBranch < 1 || c.EmployeesPerBranch > maxEmployeesPerBranch {
-		errs = append(errs, errors.New("employees per branch must be between 1 and 99"))
 	}
 	if c.MinSalesPerDay < 0 || c.MaxSalesPerDay < c.MinSalesPerDay || c.MaxSalesPerDay < 1 {
 		errs = append(errs, errors.New("sales per day must satisfy 0 <= min <= max and max >= 1"))

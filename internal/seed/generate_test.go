@@ -2,6 +2,7 @@ package seed
 
 import (
 	"reflect"
+	"slices"
 	"testing"
 	"time"
 )
@@ -11,7 +12,6 @@ func smallConfig() Config {
 	cfg.Months = 1
 	cfg.Branches = 3
 	cfg.Items = 40
-	cfg.EmployeesPerBranch = 3
 	cfg.MinSalesPerDay = 1
 	cfg.MaxSalesPerDay = 4
 	return cfg
@@ -32,6 +32,16 @@ func TestWordLists(t *testing.T) {
 	}
 	if branchSites[0].Name != "Centro" {
 		t.Fatalf("first branch is %q, want Centro", branchSites[0].Name)
+	}
+	tiers := map[string]int{}
+	for _, s := range branchSites {
+		tiers[s.Tier]++
+	}
+	if want := map[string]int{"large": 3, "medium": 7, "small": 5}; !reflect.DeepEqual(tiers, want) {
+		t.Fatalf("tiers = %v, want %v", tiers, want)
+	}
+	if first := []string{branchSites[0].Tier, branchSites[1].Tier, branchSites[2].Tier}; !reflect.DeepEqual(first, []string{"large", "medium", "small"}) {
+		t.Fatalf("first three tiers = %v, want large, medium, small", first)
 	}
 	for _, c := range categoryDefs {
 		if len(c.Styles) == 0 {
@@ -71,9 +81,6 @@ func TestGenerateCatalog(t *testing.T) {
 			if len(ds.Items) != cfg.Items {
 				t.Fatalf("items = %d, want %d", len(ds.Items), cfg.Items)
 			}
-			if want := cfg.Branches * cfg.EmployeesPerBranch; len(ds.Employees) != want {
-				t.Fatalf("employees = %d, want %d", len(ds.Employees), want)
-			}
 
 			codes := map[string]bool{}
 			unique := func(kind, code string) {
@@ -86,7 +93,7 @@ func TestGenerateCatalog(t *testing.T) {
 
 			for _, b := range ds.Branches {
 				unique("branch", b.Code)
-				if b.Timezone != cfg.Timezone || b.Name == "" || b.City == "" || b.State == "" {
+				if b.Timezone != cfg.Timezone || b.Name == "" || b.City == "" || b.State == "" || b.Tier == "" {
 					t.Fatalf("incomplete branch %+v", b)
 				}
 				if !b.OpenedOn.Before(start) {
@@ -114,7 +121,10 @@ func TestGenerateCatalog(t *testing.T) {
 					t.Fatalf("incomplete item %+v", it)
 				}
 			}
+			end := start.AddDate(0, cfg.Months, 0)
 			managers := make([]int, len(ds.Branches))
+			initial := make([]int, len(ds.Branches))
+			departures, replacements := 0, 0
 			for _, e := range ds.Employees {
 				unique("employee", e.Code)
 				if e.Branch < 0 || e.Branch >= len(ds.Branches) {
@@ -123,22 +133,43 @@ func TestGenerateCatalog(t *testing.T) {
 				switch e.Role {
 				case "manager":
 					managers[e.Branch]++
+					if !e.TerminatedOn.IsZero() {
+						t.Fatalf("manager %s left", e.Code)
+					}
 				case "seller":
 				default:
 					t.Fatalf("employee %s has role %q", e.Code, e.Role)
 				}
 				opened := ds.Branches[e.Branch].OpenedOn
-				if e.HiredOn.Before(opened) || !e.HiredOn.Before(start) {
-					t.Fatalf("employee %s hired %v, outside [%v, %v)", e.Code, e.HiredOn, opened, start)
+				if e.HiredOn.Before(opened) || !e.HiredOn.Before(end) {
+					t.Fatalf("employee %s hired %v, outside [%v, %v)", e.Code, e.HiredOn, opened, end)
 				}
-				if e.FullName == "" {
-					t.Fatalf("employee %s has no name", e.Code)
+				if e.HiredOn.Before(start) {
+					initial[e.Branch]++
+				} else {
+					replacements++
+				}
+				if !e.TerminatedOn.IsZero() {
+					departures++
+					if e.TerminatedOn.Before(start) || !e.TerminatedOn.Before(end) || e.TerminatedOn.Before(e.HiredOn) {
+						t.Fatalf("employee %s hired %v left %v, outside the window", e.Code, e.HiredOn, e.TerminatedOn)
+					}
+				}
+				if e.FullName == "" || e.Weight < minWeight || e.Weight > maxWeight || e.DayOff > time.Thursday {
+					t.Fatalf("incomplete employee %+v", e)
 				}
 			}
 			for b, n := range managers {
 				if n != 1 {
 					t.Fatalf("branch %s has %d managers, want 1", ds.Branches[b].Code, n)
 				}
+				td := tiers[ds.Branches[b].Tier]
+				if initial[b] < td.MinStaff || initial[b] > td.MaxStaff {
+					t.Fatalf("branch %s starts with %d staff, want %d-%d", ds.Branches[b].Code, initial[b], td.MinStaff, td.MaxStaff)
+				}
+			}
+			if replacements > departures {
+				t.Fatalf("%d replacements for %d departures", replacements, departures)
 			}
 		})
 	}
@@ -170,6 +201,10 @@ func TestGenerateSales(t *testing.T) {
 				days++
 			}
 
+			staff := make([][]int, len(ds.Branches))
+			for i, e := range ds.Employees {
+				staff[e.Branch] = append(staff[e.Branch], i)
+			}
 			perBranchDay := map[string]int{}
 			folios := map[string]bool{}
 			lastAt := make([]time.Time, len(ds.Branches))
@@ -184,6 +219,19 @@ func TestGenerateSales(t *testing.T) {
 				}
 				if s.Employee < 0 || s.Employee >= len(ds.Employees) || ds.Employees[s.Employee].Branch != s.Branch {
 					t.Fatalf("sale %s has employee %d from another branch", s.Folio, s.Employee)
+				}
+				if duty := onDuty(ds.Employees, staff[s.Branch], dateOf(s.SoldAt)); !slices.Contains(duty, s.Employee) {
+					t.Fatalf("sale %s by employee %s, who is not on duty", s.Folio, ds.Employees[s.Employee].Code)
+				}
+				switch s.Status {
+				case "completed":
+					checkPayments(t, s.TotalCents, s.Payments)
+				case "cancelled":
+					if s.Payments != nil {
+						t.Fatalf("cancelled sale %s has payments", s.Folio)
+					}
+				default:
+					t.Fatalf("sale %s has status %q", s.Folio, s.Status)
 				}
 				if s.SoldAt.Location().String() != cfg.Timezone {
 					t.Fatalf("sale %s in zone %v", s.Folio, s.SoldAt.Location())
@@ -214,8 +262,11 @@ func TestGenerateSales(t *testing.T) {
 					}
 					seen[l.Item] = true
 					it := ds.Items[l.Item]
-					if l.Quantity < 1 || l.UnitPriceCents != it.ListPriceCents || l.UnitCostCents != it.UnitCostCents || l.DiscountCents != 0 {
+					if l.Quantity < 1 || l.Quantity > len(quantityWeights) || l.UnitPriceCents != it.ListPriceCents || l.UnitCostCents != it.UnitCostCents {
 						t.Fatalf("sale %s line %+v does not match item %+v", s.Folio, l, it)
+					}
+					if !validDiscount(int64(l.Quantity)*l.UnitPriceCents, l.DiscountCents) {
+						t.Fatalf("sale %s line %d discount %d is not a listed percentage", s.Folio, l.LineNo, l.DiscountCents)
 					}
 					if l.TotalCents != int64(l.Quantity)*l.UnitPriceCents-l.DiscountCents {
 						t.Fatalf("sale %s line %d total %d", s.Folio, l.LineNo, l.TotalCents)
@@ -229,16 +280,57 @@ func TestGenerateSales(t *testing.T) {
 					t.Fatalf("sale %s subtotal %d tax %d, want %d %d", s.Folio, s.SubtotalCents, s.TaxCents, sub, tax)
 				}
 			}
-			for key, n := range perBranchDay {
-				if n < cfg.MinSalesPerDay || n > cfg.MaxSalesPerDay {
-					t.Fatalf("%s has %d sales, want %d-%d", key, n, cfg.MinSalesPerDay, cfg.MaxSalesPerDay)
+			if days == 0 || len(ds.Sales) == 0 {
+				t.Fatalf("%d days, %d sales", days, len(ds.Sales))
+			}
+			for d := first; d.Before(end); d = d.AddDate(0, 0, 1) {
+				pct := dayPercent(d)
+				lo := (cfg.MinSalesPerDay*pct*85 + 5000) / 10000
+				hi := (cfg.MaxSalesPerDay*pct*115 + 5000) / 10000
+				for _, b := range ds.Branches {
+					key := b.Code + d.Format(time.DateOnly)
+					if n := perBranchDay[key]; n < lo || n > hi {
+						t.Fatalf("%s has %d sales, want %d-%d", key, n, lo, hi)
+					}
 				}
 			}
-			lo, hi := days*cfg.Branches*cfg.MinSalesPerDay, days*cfg.Branches*cfg.MaxSalesPerDay
-			if len(ds.Sales) < lo || len(ds.Sales) > hi {
-				t.Fatalf("sales = %d, want %d-%d", len(ds.Sales), lo, hi)
-			}
 		})
+	}
+}
+
+func TestSalesCalendarShape(t *testing.T) {
+	ds := mustGenerate(t, Default())
+	byWeekday := map[time.Weekday]int{}
+	byDate := map[string]int{}
+	byHour := map[int]int{}
+	for _, s := range ds.Sales {
+		byWeekday[s.SoldAt.Weekday()]++
+		byDate[s.SoldAt.Format(time.DateOnly)]++
+		byHour[s.SoldAt.Hour()]++
+	}
+	for wd := time.Sunday; wd <= time.Saturday; wd++ {
+		if wd != time.Saturday && byWeekday[wd] >= byWeekday[time.Saturday] {
+			t.Fatalf("%v has %d sales, Saturday %d", wd, byWeekday[wd], byWeekday[time.Saturday])
+		}
+		if wd != time.Monday && byWeekday[wd] <= byWeekday[time.Monday] {
+			t.Fatalf("%v has %d sales, Monday %d", wd, byWeekday[wd], byWeekday[time.Monday])
+		}
+	}
+	busiest := ""
+	for date, n := range byDate {
+		if busiest == "" || n > byDate[busiest] {
+			busiest = date
+		}
+	}
+	if busiest != "2026-05-10" {
+		t.Fatalf("busiest day is %s, want Mother's Day 2026-05-10", busiest)
+	}
+	// Both Tuesdays: a payday and the plain Tuesday a week earlier.
+	if byDate["2026-06-30"] <= byDate["2026-06-23"] {
+		t.Fatalf("payday has %d sales, plain Tuesday %d", byDate["2026-06-30"], byDate["2026-06-23"])
+	}
+	if byHour[18] <= byHour[11] {
+		t.Fatalf("18:00 has %d sales, 11:00 %d", byHour[18], byHour[11])
 	}
 }
 
@@ -274,5 +366,82 @@ func TestDateOf(t *testing.T) {
 	got := dateOf(time.Date(2026, 5, 1, 23, 30, 0, 0, loc))
 	if want := time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC); !got.Equal(want) {
 		t.Fatalf("dateOf = %v, want %v", got, want)
+	}
+}
+
+func TestBranchTiersAndStaff(t *testing.T) {
+	ds := mustGenerate(t, Default())
+	salesByTier := map[string]int{}
+	for _, s := range ds.Sales {
+		salesByTier[ds.Branches[s.Branch].Tier]++
+	}
+	branchesByTier := map[string]int{}
+	for _, b := range ds.Branches {
+		branchesByTier[b.Tier]++
+	}
+	perBranch := func(tier string) int { return salesByTier[tier] / branchesByTier[tier] }
+	if !(perBranch("large") > perBranch("medium") && perBranch("medium") > perBranch("small")) {
+		t.Fatalf("sales per branch: large %d, medium %d, small %d", perBranch("large"), perBranch("medium"), perBranch("small"))
+	}
+
+	departures, replacements := 0, 0
+	for _, e := range ds.Employees {
+		if !e.TerminatedOn.IsZero() {
+			departures++
+		}
+		if !e.HiredOn.Before(Default().Start) {
+			replacements++
+		}
+	}
+	if departures == 0 || replacements == 0 {
+		t.Fatalf("%d departures, %d replacements; want some of each", departures, replacements)
+	}
+}
+
+func validDiscount(gross, discount int64) bool {
+	if discount == 0 {
+		return true
+	}
+	for _, p := range discountPercents {
+		if discount == divRoundHalfUp(gross*int64(p), 100) {
+			return true
+		}
+	}
+	return false
+}
+
+func TestBaskets(t *testing.T) {
+	ds := mustGenerate(t, Default())
+	var lines, discounted, singleUnit int
+	sizes := make([]int, len(basketWeights)+1)
+	revenue := map[string]int64{}
+	sales := map[string]int64{}
+	for _, s := range ds.Sales {
+		sizes[len(s.Lines)]++
+		tier := ds.Branches[s.Branch].Tier
+		revenue[tier] += s.TotalCents
+		sales[tier]++
+		for _, l := range s.Lines {
+			lines++
+			if l.DiscountCents > 0 {
+				discounted++
+			}
+			if l.Quantity == 1 {
+				singleUnit++
+			}
+		}
+	}
+	if pct := discounted * 100 / lines; pct < 8 || pct > 12 {
+		t.Fatalf("%d%% of lines discounted, want about 10%%", pct)
+	}
+	if pct := singleUnit * 100 / lines; pct < 85 {
+		t.Fatalf("%d%% of lines have one unit, want most", pct)
+	}
+	if !(sizes[1] > sizes[2] && sizes[2] > sizes[3] && sizes[3] > 0) {
+		t.Fatalf("basket sizes %v, want 1 > 2 > 3 > 0 lines", sizes[1:])
+	}
+	ticket := func(tier string) int64 { return revenue[tier] / sales[tier] }
+	if !(ticket("large") > ticket("medium") && ticket("medium") > ticket("small")) {
+		t.Fatalf("average ticket: large %d, medium %d, small %d", ticket("large"), ticket("medium"), ticket("small"))
 	}
 }

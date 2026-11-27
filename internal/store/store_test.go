@@ -59,7 +59,7 @@ func TestSeedQueries(t *testing.T) {
 
 	branchID, err := q.InsertBranch(ctx, store.InsertBranchParams{
 		Code: "S01", Name: "Centro", City: "Ciudad de México", State: "CDMX",
-		Timezone: "America/Mexico_City", OpenedOn: day,
+		Timezone: "America/Mexico_City", OpenedOn: day, Tier: "large",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -77,20 +77,62 @@ func TestSeedQueries(t *testing.T) {
 	}
 	employeeID, err := q.InsertEmployee(ctx, store.InsertEmployeeParams{
 		Code: "S01-E01", BranchID: branchID, FullName: "Ana López García", Role: "manager", HiredOn: day,
+		TerminatedOn: sql.NullTime{Time: day.AddDate(0, 1, 0), Valid: true},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	saleID, err := q.InsertSale(ctx, store.InsertSaleParams{
 		Folio: "S01-000001", BranchID: branchID, EmployeeID: employeeID, SoldAt: day.Add(12 * time.Hour),
+		Status: "completed", SubtotalCents: 862069, TaxCents: 137931, TotalCents: 1000000,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	lineID, err := q.InsertSaleLine(ctx, store.InsertSaleLineParams{
+		SaleID: saleID, LineNo: 1, ItemID: itemID, Quantity: 1,
+		UnitPriceCents: 1000000, UnitCostCents: 400000, DiscountCents: 0, TotalCents: 1000000,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	payments := []store.InsertSalePaymentParams{
+		{SaleID: saleID, Method: "card", AmountCents: 600000,
+			CardBrand: sql.NullString{String: "Visa", Valid: true}, Last4: sql.NullString{String: "0042", Valid: true}},
+		{SaleID: saleID, Method: "cash", AmountCents: 400000},
+	}
+	for _, p := range payments {
+		if _, err := q.InsertSalePayment(ctx, p); err != nil {
+			t.Fatalf("InsertSalePayment(%s): %v", p.Method, err)
+		}
+	}
+	rejected := []struct {
+		name string
+		p    store.InsertSalePaymentParams
+	}{
+		{"card without brand", store.InsertSalePaymentParams{SaleID: saleID, Method: "card", AmountCents: 1,
+			Last4: sql.NullString{String: "0042", Valid: true}}},
+		{"cash with last4", store.InsertSalePaymentParams{SaleID: saleID, Method: "cash", AmountCents: 1,
+			Last4: sql.NullString{String: "0042", Valid: true}}},
+		{"bad last4", store.InsertSalePaymentParams{SaleID: saleID, Method: "card", AmountCents: 1,
+			CardBrand: sql.NullString{String: "Visa", Valid: true}, Last4: sql.NullString{String: "42", Valid: true}}},
+		{"zero amount", store.InsertSalePaymentParams{SaleID: saleID, Method: "cash"}},
+		{"unknown method", store.InsertSalePaymentParams{SaleID: saleID, Method: "cheque", AmountCents: 1}},
+	}
+	for _, r := range rejected {
+		if _, err := q.InsertSalePayment(ctx, r.p); err == nil {
+			t.Fatalf("InsertSalePayment(%s) succeeded, want a check violation", r.name)
+		}
+	}
+	returnID, err := q.InsertSaleReturn(ctx, store.InsertSaleReturnParams{
+		Folio: "S01-000001-D", SaleID: saleID, EmployeeID: employeeID, ReturnedAt: day.Add(36 * time.Hour),
 		SubtotalCents: 862069, TaxCents: 137931, TotalCents: 1000000,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := q.InsertSaleLine(ctx, store.InsertSaleLineParams{
-		SaleID: saleID, LineNo: 1, ItemID: itemID, Quantity: 1,
-		UnitPriceCents: 1000000, UnitCostCents: 400000, DiscountCents: 0, TotalCents: 1000000,
+	if _, err := q.InsertSaleReturnLine(ctx, store.InsertSaleReturnLineParams{
+		ReturnID: returnID, LineNo: 1, SaleLineID: lineID, Quantity: 1, RefundCents: 1000000,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -99,7 +141,10 @@ func TestSeedQueries(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := store.CountSeedRowsRow{Branches: 1, Categories: 1, Items: 1, Employees: 1, Sales: 1, SaleLines: 1}
+	want := store.CountSeedRowsRow{
+		Branches: 1, Categories: 1, Items: 1, Employees: 1, Sales: 1, SaleLines: 1,
+		SalePayments: 2, SaleReturns: 1, SaleReturnLines: 1,
+	}
 	if got != want {
 		t.Fatalf("CountSeedRows = %+v, want %+v", got, want)
 	}
@@ -112,7 +157,7 @@ func TestSeedQueries(t *testing.T) {
 	}
 	again, err := q.InsertBranch(ctx, store.InsertBranchParams{
 		Code: "S01", Name: "Centro", City: "Ciudad de México", State: "CDMX",
-		Timezone: "America/Mexico_City", OpenedOn: day,
+		Timezone: "America/Mexico_City", OpenedOn: day, Tier: "large",
 	})
 	if err != nil || again != 1 {
 		t.Fatalf("InsertBranch after reset = %d, %v; want identity restarted at 1", again, err)

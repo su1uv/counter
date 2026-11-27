@@ -21,7 +21,6 @@ func smallConfig() seed.Config {
 	cfg.Months = 1
 	cfg.Branches = 2
 	cfg.Items = 20
-	cfg.EmployeesPerBranch = 2
 	cfg.MinSalesPerDay = 1
 	cfg.MaxSalesPerDay = 3
 	return cfg
@@ -111,7 +110,8 @@ func TestRunAgainstDatabase(t *testing.T) {
 	}{
 		{"first seed", nil, "", "seeded 2 branches"},
 		{"refuses non-empty tables", nil, "-reset", ""},
-		{"reset", []string{"-reset"}, "", "with seed 1"},
+		{"reset", []string{"-reset"}, "", "payments"},
+		{"reset again", []string{"-reset"}, "", "with seed 1"},
 		{"reset with another seed", []string{"-reset", "-seed", "7"}, "", "with seed 7"},
 	}
 	for _, s := range steps {

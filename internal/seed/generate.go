@@ -25,22 +25,43 @@ func Generate(cfg Config) (Dataset, error) {
 	ds.Employees = generateEmployees(r, cfg, ds.Branches, start)
 	loc, _ := time.LoadLocation(cfg.Timezone) // checked by Validate
 	ds.Sales = generateSales(r, cfg, loc, start, ds)
+	ds.Returns = generateReturns(r, cfg, loc, start, ds)
 	return ds, nil
 }
 
-// Opening hours, in seconds after local midnight.
-const (
-	opensAt  = 11 * 3600
-	closesAt = 21 * 3600
-)
-
-// generateSales walks the window day by day. Each branch gets a uniform
-// number of sales per day at uniform times within opening hours, each by a
-// uniform employee of that branch. Folios run per branch in time order.
-func generateSales(r *rand.Rand, cfg Config, loc *time.Location, start time.Time, ds Dataset) []Sale {
-	staff := make([][]int, len(ds.Branches))
-	for i, e := range ds.Employees {
+// staffByBranch lists each branch's employees as indexes into employees.
+func staffByBranch(branches []Branch, employees []Employee) [][]int {
+	staff := make([][]int, len(branches))
+	for i, e := range employees {
 		staff[e.Branch] = append(staff[e.Branch], i)
+	}
+	return staff
+}
+
+// pickOnDuty picks one of the staff on duty on day, weighted by
+// productivity.
+func pickOnDuty(r *rand.Rand, employees []Employee, staff []int, day time.Time) int {
+	duty := onDuty(employees, staff, day)
+	weights := make([]int, len(duty))
+	for i, e := range duty {
+		weights[i] = employees[e].Weight
+	}
+	return duty[weightedIndex(r, weights)]
+}
+
+// generateSales walks the window day by day. Each branch's daily count
+// follows its tier's base rate and the calendar (see dailySales), and sale
+// times follow the hourly curve. Each sale is by an employee on duty,
+// weighted by productivity. Folios run per branch in time order. A few
+// sales are cancelled the same day; they keep their lines but have no
+// payments.
+func generateSales(r *rand.Rand, cfg Config, loc *time.Location, start time.Time, ds Dataset) []Sale {
+	staff := staffByBranch(ds.Branches, ds.Employees)
+	base := make([]int, len(ds.Branches))
+	mix := make([][]int, len(ds.Branches))
+	for b, branch := range ds.Branches {
+		base[b] = tierBase(r, cfg, tiers[branch.Tier])
+		mix[b] = itemWeights(tiers[branch.Tier], ds.Items)
 	}
 	folios := make([]int, len(ds.Branches))
 	end := start.AddDate(0, cfg.Months, 0)
@@ -48,9 +69,9 @@ func generateSales(r *rand.Rand, cfg Config, loc *time.Location, start time.Time
 	for day := start; day.Before(end); day = day.AddDate(0, 0, 1) {
 		y, m, d := day.Date()
 		for b, branch := range ds.Branches {
-			times := make([]int, cfg.MinSalesPerDay+r.IntN(cfg.MaxSalesPerDay-cfg.MinSalesPerDay+1))
+			times := make([]int, dailySales(r, base[b], day))
 			for i := range times {
-				times[i] = opensAt + r.IntN(closesAt-opensAt)
+				times[i] = saleSecond(r)
 			}
 			slices.Sort(times)
 			for _, sec := range times {
@@ -58,14 +79,20 @@ func generateSales(r *rand.Rand, cfg Config, loc *time.Location, start time.Time
 				sale := Sale{
 					Folio:    fmt.Sprintf("%s-%06d", branch.Code, folios[b]),
 					Branch:   b,
-					Employee: staff[b][r.IntN(len(staff[b]))],
+					Employee: pickOnDuty(r, ds.Employees, staff[b], day),
 					SoldAt:   time.Date(y, m, d, 0, 0, sec, 0, loc),
-					Lines:    generateLines(r, ds.Items),
+					Status:   "completed",
+					Lines:    generateLines(r, ds.Items, mix[b]),
 				}
 				for _, l := range sale.Lines {
 					sale.TotalCents += l.TotalCents
 				}
 				sale.SubtotalCents, sale.TaxCents = SplitTax(sale.TotalCents, ivaBP)
+				if r.IntN(1000) < cancelPerMille {
+					sale.Status = "cancelled"
+				} else {
+					sale.Payments = generatePayments(r, sale.TotalCents)
+				}
 				out = append(out, sale)
 			}
 		}
@@ -73,25 +100,45 @@ func generateSales(r *rand.Rand, cfg Config, loc *time.Location, start time.Time
 	return out
 }
 
-// generateLines picks 1 to 3 distinct items, one unit each, at list price.
-func generateLines(r *rand.Rand, items []Item) []SaleLine {
-	n := min(1+r.IntN(3), len(items))
+// Basket shape. Index i of basketWeights is the weight of i+1 lines, and
+// likewise for quantityWeights and units per line.
+var (
+	basketWeights    = []int{70, 22, 8}
+	quantityWeights  = []int{92, 6, 2}
+	discountPercents = []int{5, 10, 15, 20}
+)
+
+// discountLinePercent is the share of lines that get a discount.
+const discountLinePercent = 10
+
+// generateLines picks distinct items by the branch's item weights, at list
+// price, with an occasional percentage discount off the line.
+func generateLines(r *rand.Rand, items []Item, weights []int) []SaleLine {
+	n := min(1+weightedIndex(r, basketWeights), len(items))
 	picked := make([]int, 0, n)
 	for len(picked) < n {
-		if i := r.IntN(len(items)); !slices.Contains(picked, i) {
+		if i := weightedIndex(r, weights); !slices.Contains(picked, i) {
 			picked = append(picked, i)
 		}
 	}
 	lines := make([]SaleLine, n)
 	for i, item := range picked {
 		it := items[item]
+		qty := 1 + weightedIndex(r, quantityWeights)
+		gross := int64(qty) * it.ListPriceCents
+		var discount int64
+		if r.IntN(100) < discountLinePercent {
+			pct := discountPercents[r.IntN(len(discountPercents))]
+			discount = divRoundHalfUp(gross*int64(pct), 100)
+		}
 		lines[i] = SaleLine{
 			LineNo:         i + 1,
 			Item:           item,
-			Quantity:       1,
+			Quantity:       qty,
 			UnitPriceCents: it.ListPriceCents,
 			UnitCostCents:  it.UnitCostCents,
-			TotalCents:     it.ListPriceCents,
+			DiscountCents:  discount,
+			TotalCents:     gross - discount,
 		}
 	}
 	return lines
@@ -117,6 +164,7 @@ func generateBranches(r *rand.Rand, cfg Config, start time.Time) []Branch {
 			State:    s.State,
 			Timezone: cfg.Timezone,
 			OpenedOn: start.AddDate(0, 0, -(365 + r.IntN(14*365))),
+			Tier:     s.Tier,
 		}
 	}
 	return out
@@ -160,27 +208,53 @@ func priceRange(category, material int) (lo, hi int64) {
 	return m.MinPesos, m.MaxPesos
 }
 
-// generateEmployees gives every branch one manager (the first employee)
-// and sellers, all hired between the branch opening and start.
+// generateEmployees staffs each branch by tier with one manager (the first
+// employee) and sellers, hired between the branch opening and start. A
+// seller may leave during the window; a replacement starts 3 to 20 days
+// later if that is still inside the window. The manager never leaves.
 func generateEmployees(r *rand.Rand, cfg Config, branches []Branch, start time.Time) []Employee {
-	out := make([]Employee, 0, len(branches)*cfg.EmployeesPerBranch)
+	end := start.AddDate(0, cfg.Months, 0)
+	window := int(end.Sub(start).Hours() / 24)
+	var out []Employee
 	for b, branch := range branches {
+		t := tiers[branch.Tier]
 		days := int(start.Sub(branch.OpenedOn).Hours() / 24)
-		for e := range cfg.EmployeesPerBranch {
+		n := t.MinStaff + r.IntN(t.MaxStaff-t.MinStaff+1)
+		var left []time.Time
+		for e := range n {
 			role := "seller"
 			if e == 0 {
 				role = "manager"
 			}
-			out = append(out, Employee{
-				Code:     fmt.Sprintf("%s-E%02d", branch.Code, e+1),
-				Branch:   b,
-				FullName: fullName(r),
-				Role:     role,
-				HiredOn:  branch.OpenedOn.AddDate(0, 0, r.IntN(days)),
-			})
+			emp := newEmployee(r, branch, b, e+1, role, branch.OpenedOn.AddDate(0, 0, r.IntN(days)))
+			if e > 0 && r.IntN(100) < departurePercent {
+				emp.TerminatedOn = start.AddDate(0, 0, r.IntN(window))
+				left = append(left, emp.TerminatedOn)
+			}
+			out = append(out, emp)
+		}
+		for _, on := range left {
+			if hired := on.AddDate(0, 0, 3+r.IntN(18)); hired.Before(end) {
+				n++
+				out = append(out, newEmployee(r, branch, b, n, "seller", hired))
+			}
 		}
 	}
 	return out
+}
+
+// newEmployee is the seq-th employee of branch b. The day off is Sunday to
+// Thursday, so nobody is off on the busy Friday and Saturday.
+func newEmployee(r *rand.Rand, branch Branch, b, seq int, role string, hired time.Time) Employee {
+	return Employee{
+		Code:     fmt.Sprintf("%s-E%02d", branch.Code, seq),
+		Branch:   b,
+		FullName: fullName(r),
+		Role:     role,
+		HiredOn:  hired,
+		Weight:   minWeight + r.IntN(maxWeight-minWeight+1),
+		DayOff:   time.Weekday(r.IntN(5)),
+	}
 }
 
 func fullName(r *rand.Rand) string {

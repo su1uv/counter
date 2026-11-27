@@ -7,6 +7,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"time"
 )
 
@@ -17,16 +18,22 @@ SELECT
     (SELECT count(*) FROM items) AS items,
     (SELECT count(*) FROM employees) AS employees,
     (SELECT count(*) FROM sales) AS sales,
-    (SELECT count(*) FROM sale_lines) AS sale_lines
+    (SELECT count(*) FROM sale_lines) AS sale_lines,
+    (SELECT count(*) FROM sale_payments) AS sale_payments,
+    (SELECT count(*) FROM sale_returns) AS sale_returns,
+    (SELECT count(*) FROM sale_return_lines) AS sale_return_lines
 `
 
 type CountSeedRowsRow struct {
-	Branches   int64
-	Categories int64
-	Items      int64
-	Employees  int64
-	Sales      int64
-	SaleLines  int64
+	Branches        int64
+	Categories      int64
+	Items           int64
+	Employees       int64
+	Sales           int64
+	SaleLines       int64
+	SalePayments    int64
+	SaleReturns     int64
+	SaleReturnLines int64
 }
 
 func (q *Queries) CountSeedRows(ctx context.Context) (CountSeedRowsRow, error) {
@@ -39,13 +46,16 @@ func (q *Queries) CountSeedRows(ctx context.Context) (CountSeedRowsRow, error) {
 		&i.Employees,
 		&i.Sales,
 		&i.SaleLines,
+		&i.SalePayments,
+		&i.SaleReturns,
+		&i.SaleReturnLines,
 	)
 	return i, err
 }
 
 const insertBranch = `-- name: InsertBranch :one
-INSERT INTO branches (code, name, city, state, timezone, opened_on)
-VALUES ($1, $2, $3, $4, $5, $6)
+INSERT INTO branches (code, name, city, state, timezone, opened_on, tier)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
 RETURNING id
 `
 
@@ -56,6 +66,7 @@ type InsertBranchParams struct {
 	State    string
 	Timezone string
 	OpenedOn time.Time
+	Tier     string
 }
 
 func (q *Queries) InsertBranch(ctx context.Context, arg InsertBranchParams) (int64, error) {
@@ -66,6 +77,7 @@ func (q *Queries) InsertBranch(ctx context.Context, arg InsertBranchParams) (int
 		arg.State,
 		arg.Timezone,
 		arg.OpenedOn,
+		arg.Tier,
 	)
 	var id int64
 	err := row.Scan(&id)
@@ -91,17 +103,18 @@ func (q *Queries) InsertCategory(ctx context.Context, arg InsertCategoryParams) 
 }
 
 const insertEmployee = `-- name: InsertEmployee :one
-INSERT INTO employees (code, branch_id, full_name, role, hired_on)
-VALUES ($1, $2, $3, $4, $5)
+INSERT INTO employees (code, branch_id, full_name, role, hired_on, terminated_on)
+VALUES ($1, $2, $3, $4, $5, $6)
 RETURNING id
 `
 
 type InsertEmployeeParams struct {
-	Code     string
-	BranchID int64
-	FullName string
-	Role     string
-	HiredOn  time.Time
+	Code         string
+	BranchID     int64
+	FullName     string
+	Role         string
+	HiredOn      time.Time
+	TerminatedOn sql.NullTime
 }
 
 func (q *Queries) InsertEmployee(ctx context.Context, arg InsertEmployeeParams) (int64, error) {
@@ -111,6 +124,7 @@ func (q *Queries) InsertEmployee(ctx context.Context, arg InsertEmployeeParams) 
 		arg.FullName,
 		arg.Role,
 		arg.HiredOn,
+		arg.TerminatedOn,
 	)
 	var id int64
 	err := row.Scan(&id)
@@ -149,8 +163,8 @@ func (q *Queries) InsertItem(ctx context.Context, arg InsertItemParams) (int64, 
 }
 
 const insertSale = `-- name: InsertSale :one
-INSERT INTO sales (folio, branch_id, employee_id, sold_at, subtotal_cents, tax_cents, total_cents)
-VALUES ($1, $2, $3, $4, $5, $6, $7)
+INSERT INTO sales (folio, branch_id, employee_id, sold_at, status, subtotal_cents, tax_cents, total_cents)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 RETURNING id
 `
 
@@ -159,6 +173,7 @@ type InsertSaleParams struct {
 	BranchID      int64
 	EmployeeID    int64
 	SoldAt        time.Time
+	Status        string
 	SubtotalCents int64
 	TaxCents      int64
 	TotalCents    int64
@@ -170,6 +185,7 @@ func (q *Queries) InsertSale(ctx context.Context, arg InsertSaleParams) (int64, 
 		arg.BranchID,
 		arg.EmployeeID,
 		arg.SoldAt,
+		arg.Status,
 		arg.SubtotalCents,
 		arg.TaxCents,
 		arg.TotalCents,
@@ -215,8 +231,94 @@ func (q *Queries) InsertSaleLine(ctx context.Context, arg InsertSaleLineParams) 
 	return id, err
 }
 
+const insertSalePayment = `-- name: InsertSalePayment :one
+INSERT INTO sale_payments (sale_id, method, amount_cents, card_brand, last4)
+VALUES ($1, $2, $3, $4, $5)
+RETURNING id
+`
+
+type InsertSalePaymentParams struct {
+	SaleID      int64
+	Method      string
+	AmountCents int64
+	CardBrand   sql.NullString
+	Last4       sql.NullString
+}
+
+func (q *Queries) InsertSalePayment(ctx context.Context, arg InsertSalePaymentParams) (int64, error) {
+	row := q.db.QueryRowContext(ctx, insertSalePayment,
+		arg.SaleID,
+		arg.Method,
+		arg.AmountCents,
+		arg.CardBrand,
+		arg.Last4,
+	)
+	var id int64
+	err := row.Scan(&id)
+	return id, err
+}
+
+const insertSaleReturn = `-- name: InsertSaleReturn :one
+INSERT INTO sale_returns (folio, sale_id, employee_id, returned_at, subtotal_cents, tax_cents, total_cents)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
+RETURNING id
+`
+
+type InsertSaleReturnParams struct {
+	Folio         string
+	SaleID        int64
+	EmployeeID    int64
+	ReturnedAt    time.Time
+	SubtotalCents int64
+	TaxCents      int64
+	TotalCents    int64
+}
+
+func (q *Queries) InsertSaleReturn(ctx context.Context, arg InsertSaleReturnParams) (int64, error) {
+	row := q.db.QueryRowContext(ctx, insertSaleReturn,
+		arg.Folio,
+		arg.SaleID,
+		arg.EmployeeID,
+		arg.ReturnedAt,
+		arg.SubtotalCents,
+		arg.TaxCents,
+		arg.TotalCents,
+	)
+	var id int64
+	err := row.Scan(&id)
+	return id, err
+}
+
+const insertSaleReturnLine = `-- name: InsertSaleReturnLine :one
+INSERT INTO sale_return_lines (return_id, line_no, sale_line_id, quantity, refund_cents)
+VALUES ($1, $2, $3, $4, $5)
+RETURNING id
+`
+
+type InsertSaleReturnLineParams struct {
+	ReturnID    int64
+	LineNo      int32
+	SaleLineID  int64
+	Quantity    int32
+	RefundCents int64
+}
+
+func (q *Queries) InsertSaleReturnLine(ctx context.Context, arg InsertSaleReturnLineParams) (int64, error) {
+	row := q.db.QueryRowContext(ctx, insertSaleReturnLine,
+		arg.ReturnID,
+		arg.LineNo,
+		arg.SaleLineID,
+		arg.Quantity,
+		arg.RefundCents,
+	)
+	var id int64
+	err := row.Scan(&id)
+	return id, err
+}
+
 const resetSeedData = `-- name: ResetSeedData :exec
-TRUNCATE sale_lines, sales, employees, items, categories, branches RESTART IDENTITY
+TRUNCATE sale_return_lines, sale_returns, sale_payments,
+    sale_lines, sales, employees, items, categories, branches RESTART IDENTITY
 `
 
 func (q *Queries) ResetSeedData(ctx context.Context) error {
