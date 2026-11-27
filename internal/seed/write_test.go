@@ -90,6 +90,14 @@ func countReturnLines(ds Dataset) int64 {
 	return n
 }
 
+func countOrderLines(ds Dataset) int64 {
+	var n int64
+	for _, po := range ds.PurchaseOrders {
+		n += int64(len(po.Lines))
+	}
+	return n
+}
+
 // zeroViolations runs queries that count rows breaking a rule.
 func zeroViolations(t *testing.T, db *sql.DB, rules []struct{ name, query string }) {
 	t.Helper()
@@ -125,6 +133,9 @@ func TestWrite(t *testing.T) {
 		SaleReturns:     int64(len(ds.Returns)),
 		SaleReturnLines: countReturnLines(ds),
 
+		Suppliers:          int64(len(ds.Suppliers)),
+		PurchaseOrders:     int64(len(ds.PurchaseOrders)),
+		PurchaseOrderLines: countOrderLines(ds),
 		InventoryMovements: int64(len(ds.Movements)),
 	}
 	if want.SaleReturns == 0 {
@@ -175,6 +186,17 @@ func TestWrite(t *testing.T) {
 			JOIN sales s ON s.id = r.sale_id LEFT JOIN inventory_movements m ON m.sale_return_line_id = rl.id
 			WHERE m.id IS NULL OR m.quantity <> rl.quantity OR m.item_id <> l.item_id
 			OR m.branch_id <> s.branch_id OR m.moved_at <> r.returned_at`},
+		{"no stock level negative", `SELECT count(*) FROM stock_levels WHERE quantity < 0`},
+		{"stock never negative", `SELECT count(*) FROM (
+			SELECT sum(quantity) OVER (PARTITION BY branch_id, item_id ORDER BY moved_at, id) AS balance
+			FROM inventory_movements) x WHERE balance < 0`},
+		{"one receipt per received order line, none for open orders", `SELECT count(*) FROM purchase_order_lines pl
+			JOIN purchase_orders po ON po.id = pl.purchase_order_id
+			LEFT JOIN inventory_movements m ON m.purchase_order_line_id = pl.id
+			WHERE (po.status = 'received') <> (m.id IS NOT NULL)
+			OR m.quantity <> pl.quantity OR m.item_id <> pl.item_id OR m.branch_id <> po.branch_id OR m.moved_at <> po.received_at`},
+		{"every receipt matches a purchase order line", `SELECT count(*) FROM inventory_movements
+			WHERE kind = 'receipt' AND purchase_order_line_id IS NULL`},
 	})
 
 	first := fingerprint(t, db)
@@ -214,6 +236,11 @@ func TestWriteErrors(t *testing.T) {
 		{"payment", func(ds *Dataset) { ds.Sales[0].Payments[0].Method = "cheque" }},
 		{"return", func(ds *Dataset) { ds.Returns[0].TotalCents++ }},
 		{"return line", func(ds *Dataset) { ds.Returns[0].Lines = append(ds.Returns[0].Lines, ds.Returns[0].Lines[0]) }},
+		{"supplier", func(ds *Dataset) { ds.Suppliers[1].Code = ds.Suppliers[0].Code }},
+		{"purchase order", func(ds *Dataset) { ds.PurchaseOrders[1].Folio = ds.PurchaseOrders[0].Folio }},
+		{"purchase order line", func(ds *Dataset) {
+			ds.PurchaseOrders[0].Lines = append(ds.PurchaseOrders[0].Lines, ds.PurchaseOrders[0].Lines[0])
+		}},
 		{"opening movement", func(ds *Dataset) { ds.Movements[0].Quantity = -1 }},
 	}
 	for _, tt := range tests {

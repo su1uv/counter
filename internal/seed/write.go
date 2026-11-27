@@ -124,6 +124,39 @@ func insert(ctx context.Context, q *store.Queries, ds Dataset) error {
 		}
 	}
 
+	supplierIDs := make([]int64, len(ds.Suppliers))
+	for i, s := range ds.Suppliers {
+		id, err := q.InsertSupplier(ctx, store.InsertSupplierParams{
+			Code: s.Code, Name: s.Name, City: s.City, LeadTimeDays: int32(s.LeadTimeDays),
+		})
+		if err != nil {
+			return fmt.Errorf("insert supplier %s: %w", s.Code, err)
+		}
+		supplierIDs[i] = id
+	}
+
+	orderLineIDs := make([][]int64, len(ds.PurchaseOrders))
+	for i, po := range ds.PurchaseOrders {
+		orderID, err := q.InsertPurchaseOrder(ctx, store.InsertPurchaseOrderParams{
+			Folio: po.Folio, SupplierID: supplierIDs[po.Supplier], BranchID: branchIDs[po.Branch], OrderedAt: po.OrderedAt,
+			ReceivedAt: sql.NullTime{Time: po.ReceivedAt, Valid: !po.ReceivedAt.IsZero()}, Status: po.Status,
+		})
+		if err != nil {
+			return fmt.Errorf("insert purchase order %s: %w", po.Folio, err)
+		}
+		orderLineIDs[i] = make([]int64, len(po.Lines))
+		for j, l := range po.Lines {
+			lineID, err := q.InsertPurchaseOrderLine(ctx, store.InsertPurchaseOrderLineParams{
+				PurchaseOrderID: orderID, LineNo: int32(l.LineNo), ItemID: itemIDs[l.Item],
+				Quantity: int32(l.Quantity), UnitCostCents: l.UnitCostCents,
+			})
+			if err != nil {
+				return fmt.Errorf("insert purchase order %s line %d: %w", po.Folio, l.LineNo, err)
+			}
+			orderLineIDs[i][j] = lineID
+		}
+	}
+
 	for _, m := range ds.Movements {
 		p := store.InsertInventoryMovementParams{
 			BranchID: branchIDs[m.Branch], ItemID: itemIDs[m.Item], MovedAt: m.MovedAt, Kind: m.Kind,
@@ -134,6 +167,8 @@ func insert(ctx context.Context, q *store.Queries, ds Dataset) error {
 			p.SaleLineID = sql.NullInt64{Int64: lineIDs[m.Doc][m.Line], Valid: true}
 		case "return":
 			p.SaleReturnLineID = sql.NullInt64{Int64: returnLineIDs[m.Doc][m.Line], Valid: true}
+		case "receipt":
+			p.PurchaseOrderLineID = sql.NullInt64{Int64: orderLineIDs[m.Doc][m.Line], Valid: true}
 		}
 		if _, err := q.InsertInventoryMovement(ctx, p); err != nil {
 			return fmt.Errorf("insert %s movement %s: %w", m.Kind, m.Reference, err)

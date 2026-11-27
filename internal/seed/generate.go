@@ -27,7 +27,8 @@ func Generate(cfg Config) (Dataset, error) {
 	base, mix := branchDemand(r, cfg, ds.Branches, ds.Items)
 	policies := stockPolicies(base, mix)
 	ds.Movements = openingStock(ds, policies, time.Date(start.Year(), start.Month(), start.Day(), 0, 0, 0, 0, loc))
-	newSimulation(r, cfg, loc, start, &ds, base, mix).run(start)
+	ds.Suppliers = generateSuppliers()
+	newSimulation(r, cfg, loc, start, &ds, base, mix, policies).run(start)
 	return ds, nil
 }
 
@@ -55,36 +56,64 @@ var (
 const discountLinePercent = 10
 
 // generateLines picks distinct items by the branch's item weights, at list
-// price, with an occasional percentage discount off the line.
-func generateLines(r *rand.Rand, items []Item, weights []int) []SaleLine {
+// price, with an occasional percentage discount off the line. An item with
+// fewer than the wanted units on hand is swapped for a substitute; with
+// none, the line is lost. It returns nil if every line is lost.
+func generateLines(r *rand.Rand, items []Item, weights, onHand []int) []SaleLine {
 	n := min(1+weightedIndex(r, basketWeights), len(items))
-	picked := make([]int, 0, n)
-	for len(picked) < n {
-		if i := weightedIndex(r, weights); !slices.Contains(picked, i) {
-			picked = append(picked, i)
+	used := make([]int, 0, 2*n) // items asked for or sold in this sale
+	var lines []SaleLine
+	for range n {
+		if len(used) == len(items) {
+			break
 		}
-	}
-	lines := make([]SaleLine, n)
-	for i, item := range picked {
-		it := items[item]
+		item := weightedIndex(r, weights)
+		for slices.Contains(used, item) {
+			item = weightedIndex(r, weights)
+		}
+		used = append(used, item)
 		qty := 1 + weightedIndex(r, quantityWeights)
+		if onHand[item] < qty {
+			if item = substitute(r, items, weights, onHand, used, item, qty); item < 0 {
+				continue
+			}
+			used = append(used, item)
+		}
+		it := items[item]
 		gross := int64(qty) * it.ListPriceCents
 		var discount int64
 		if r.IntN(100) < discountLinePercent {
 			pct := discountPercents[r.IntN(len(discountPercents))]
 			discount = divRoundHalfUp(gross*int64(pct), 100)
 		}
-		lines[i] = SaleLine{
-			LineNo:         i + 1,
+		lines = append(lines, SaleLine{
+			LineNo:         len(lines) + 1,
 			Item:           item,
 			Quantity:       qty,
 			UnitPriceCents: it.ListPriceCents,
 			UnitCostCents:  it.UnitCostCents,
 			DiscountCents:  discount,
 			TotalCents:     gross - discount,
-		}
+		})
 	}
 	return lines
+}
+
+// substitute picks, by weight, an item of the same category as item that
+// is not used in the sale yet and has qty units on hand. It returns -1 if
+// there is none.
+func substitute(r *rand.Rand, items []Item, weights, onHand, used []int, item, qty int) int {
+	var candidates, candidateWeights []int
+	for i, it := range items {
+		if it.Category == items[item].Category && onHand[i] >= qty && !slices.Contains(used, i) {
+			candidates = append(candidates, i)
+			candidateWeights = append(candidateWeights, weights[i])
+		}
+	}
+	if candidates == nil {
+		return -1
+	}
+	return candidates[weightedIndex(r, candidateWeights)]
 }
 
 func generateCategories() []Category {

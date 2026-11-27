@@ -6,20 +6,49 @@ import "time"
 // index; Write maps indexes to database ids. Dates (OpenedOn, HiredOn) are
 // midnight UTC and carry only the calendar day.
 type Dataset struct {
-	Branches   []Branch
-	Categories []Category
-	Items      []Item
-	Employees  []Employee
-	Sales      []Sale
-	Returns    []Return
-	Movements  []Movement
+	Branches       []Branch
+	Categories     []Category
+	Items          []Item
+	Employees      []Employee
+	Sales          []Sale
+	Returns        []Return
+	Suppliers      []Supplier
+	PurchaseOrders []PurchaseOrder
+	Movements      []Movement
+}
+
+type Supplier struct {
+	Code         string
+	Name         string
+	City         string
+	LeadTimeDays int
+}
+
+// PurchaseOrder is placed by a branch after closing and delivered straight
+// to it, in full, a few days later. Times are in the branch's zone.
+type PurchaseOrder struct {
+	Folio      string
+	Supplier   int // index into Dataset.Suppliers
+	Branch     int // index into Dataset.Branches
+	OrderedAt  time.Time
+	ReceivedAt time.Time // zero while still open
+	Status     string    // "ordered" or "received"
+	Lines      []PurchaseOrderLine
+}
+
+type PurchaseOrderLine struct {
+	LineNo        int
+	Item          int // index into Dataset.Items
+	Quantity      int
+	UnitCostCents int64
 }
 
 // Movement is one row of the inventory ledger, in the branch's zone.
 // Quantity is signed: sales and transfers out are negative. Reference is
 // the business code of the source document. Doc and Line locate the source
-// line of sale movements (Dataset.Sales) and return movements
-// (Dataset.Returns); other kinds leave them zero.
+// line of sale movements (Dataset.Sales), return movements
+// (Dataset.Returns) and receipts (Dataset.PurchaseOrders); other kinds
+// leave them zero.
 type Movement struct {
 	Branch        int // index into Dataset.Branches
 	Item          int // index into Dataset.Items
