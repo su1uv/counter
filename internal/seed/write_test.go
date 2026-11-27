@@ -59,7 +59,10 @@ func fingerprint(t *testing.T, db *sql.DB) string {
 		(SELECT md5(string_agg(t::text, '|' ORDER BY id)) FROM suppliers t),
 		(SELECT md5(string_agg(t::text, '|' ORDER BY id)) FROM purchase_orders t),
 		(SELECT md5(string_agg(t::text, '|' ORDER BY id)) FROM purchase_order_lines t),
-		(SELECT md5(string_agg(t::text, '|' ORDER BY id)) FROM inventory_movements t))`).Scan(&fp)
+		(SELECT md5(string_agg(t::text, '|' ORDER BY id)) FROM inventory_movements t),
+		(SELECT md5(string_agg(t::text, '|' ORDER BY id)) FROM cash_registers t),
+		(SELECT md5(string_agg(t::text, '|' ORDER BY id)) FROM register_shifts t),
+		(SELECT md5(string_agg(t::text, '|' ORDER BY id)) FROM cash_movements t))`).Scan(&fp)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -137,9 +140,11 @@ func TestWrite(t *testing.T) {
 		PurchaseOrders:     int64(len(ds.PurchaseOrders)),
 		PurchaseOrderLines: countOrderLines(ds),
 		InventoryMovements: int64(len(ds.Movements)),
+		CashRegisters:      int64(len(ds.Registers)),
+		RegisterShifts:     int64(len(ds.Shifts)),
 	}
-	if want.SaleReturns == 0 {
-		t.Fatal("small dataset has no returns to write")
+	if want.SaleReturns == 0 || want.RegisterShifts == 0 {
+		t.Fatal("small dataset has no returns or shifts to write")
 	}
 	if got != want {
 		t.Fatalf("CountSeedRows = %+v, want %+v", got, want)
@@ -204,6 +209,17 @@ func TestWrite(t *testing.T) {
 			OR count(DISTINCT m.item_id) <> 1 OR count(DISTINCT b.city) <> 1) x`},
 		{"count adjustments are shrinkage", `SELECT count(*) FROM inventory_movements
 			WHERE kind = 'adjustment' AND quantity >= 0`},
+		{"every sale has a shift", `SELECT count(*) FROM sales WHERE shift_id IS NULL`},
+		{"sale is inside its shift at the same branch", `SELECT count(*) FROM sales s
+			JOIN register_shifts sh ON sh.id = s.shift_id
+			JOIN cash_registers r ON r.id = sh.register_id
+			WHERE s.sold_at < sh.opened_at OR s.sold_at >= sh.closed_at OR s.branch_id <> r.branch_id`},
+		{"one register per branch", `SELECT count(*) FROM branches b
+			WHERE (SELECT count(*) FROM cash_registers r WHERE r.branch_id = b.id) <> 1`},
+		{"shift opener works at the register's branch", `SELECT count(*) FROM register_shifts sh
+			JOIN cash_registers r ON r.id = sh.register_id
+			JOIN employees e ON e.id = sh.opened_by
+			WHERE e.branch_id <> r.branch_id`},
 	})
 
 	first := fingerprint(t, db)
@@ -249,6 +265,8 @@ func TestWriteErrors(t *testing.T) {
 			ds.PurchaseOrders[0].Lines = append(ds.PurchaseOrders[0].Lines, ds.PurchaseOrders[0].Lines[0])
 		}},
 		{"opening movement", func(ds *Dataset) { ds.Movements[0].Quantity = -1 }},
+		{"register", func(ds *Dataset) { ds.Registers[1].Code = ds.Registers[0].Code }},
+		{"shift", func(ds *Dataset) { ds.Shifts[0].ClosedAt = ds.Shifts[0].OpenedAt }},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

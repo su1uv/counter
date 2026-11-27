@@ -24,6 +24,7 @@ type simulation struct {
 	folios       []int   // last sale folio of each branch
 	poFolios     []int   // last purchase order folio of each branch
 	transfers    int     // last transfer number, across branches
+	openToday    [][]int // shift indexes open today at each branch
 	onHand       [][]int // units of each item at each branch
 	onOrder      [][]int // units ordered or in transit, not yet received
 	// returning and arriving hold movements for a later day.
@@ -56,12 +57,14 @@ func newSimulation(r *rand.Rand, cfg Config, loc *time.Location, start time.Time
 }
 
 // run simulates each day: deliveries and transfers arrive before opening,
-// every branch sells during opening hours, and after closing the day's
-// returns go back on the shelf, month-end counts record shrinkage, sold-out
-// items are borrowed from nearby branches, and low stock is reordered.
+// the register opens, every branch sells during opening hours, and after
+// closing the day's returns go back on the shelf, month-end counts record
+// shrinkage, sold-out items are borrowed from nearby branches, and low
+// stock is reordered.
 func (s *simulation) run(start time.Time) {
 	for day := start; day.Before(s.end); day = day.AddDate(0, 0, 1) {
 		s.receive(day)
+		s.openShifts(day)
 		for b := range s.ds.Branches {
 			s.sell(b, day)
 		}
@@ -100,11 +103,13 @@ func (s *simulation) sell(b int, day time.Time) {
 			continue
 		}
 		s.folios[b]++
+		soldAt := time.Date(y, m, d, 0, 0, sec, 0, s.loc)
 		sale := Sale{
 			Folio:    fmt.Sprintf("%s-%06d", branch.Code, s.folios[b]),
 			Branch:   b,
 			Employee: pickOnDuty(r, s.ds.Employees, s.staff[b], day),
-			SoldAt:   time.Date(y, m, d, 0, 0, sec, 0, s.loc),
+			SoldAt:   soldAt,
+			Shift:    s.shiftAt(b, soldAt),
 			Status:   "completed",
 			Lines:    lines,
 		}
