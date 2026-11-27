@@ -55,7 +55,11 @@ func fingerprint(t *testing.T, db *sql.DB) string {
 		(SELECT md5(string_agg(t::text, '|' ORDER BY id)) FROM sale_lines t),
 		(SELECT md5(string_agg(t::text, '|' ORDER BY id)) FROM sale_payments t),
 		(SELECT md5(string_agg(t::text, '|' ORDER BY id)) FROM sale_returns t),
-		(SELECT md5(string_agg(t::text, '|' ORDER BY id)) FROM sale_return_lines t))`).Scan(&fp)
+		(SELECT md5(string_agg(t::text, '|' ORDER BY id)) FROM sale_return_lines t),
+		(SELECT md5(string_agg(t::text, '|' ORDER BY id)) FROM suppliers t),
+		(SELECT md5(string_agg(t::text, '|' ORDER BY id)) FROM purchase_orders t),
+		(SELECT md5(string_agg(t::text, '|' ORDER BY id)) FROM purchase_order_lines t),
+		(SELECT md5(string_agg(t::text, '|' ORDER BY id)) FROM inventory_movements t))`).Scan(&fp)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -82,6 +86,14 @@ func countReturnLines(ds Dataset) int64 {
 	var n int64
 	for _, r := range ds.Returns {
 		n += int64(len(r.Lines))
+	}
+	return n
+}
+
+func countOrderLines(ds Dataset) int64 {
+	var n int64
+	for _, po := range ds.PurchaseOrders {
+		n += int64(len(po.Lines))
 	}
 	return n
 }
@@ -120,6 +132,11 @@ func TestWrite(t *testing.T) {
 		SalePayments:    countPayments(ds),
 		SaleReturns:     int64(len(ds.Returns)),
 		SaleReturnLines: countReturnLines(ds),
+
+		Suppliers:          int64(len(ds.Suppliers)),
+		PurchaseOrders:     int64(len(ds.PurchaseOrders)),
+		PurchaseOrderLines: countOrderLines(ds),
+		InventoryMovements: int64(len(ds.Movements)),
 	}
 	if want.SaleReturns == 0 {
 		t.Fatal("small dataset has no returns to write")
@@ -152,6 +169,41 @@ func TestWrite(t *testing.T) {
 			JOIN sales s ON s.id = r.sale_id JOIN employees e ON e.id = r.employee_id
 			WHERE r.returned_at <= s.sold_at OR r.returned_at > s.sold_at + interval '31 days' OR e.branch_id <> s.branch_id`},
 		{"first sale keeps its folio", `SELECT count(*) FROM sales WHERE id = 1 AND folio <> '` + ds.Sales[0].Folio + `'`},
+		{"every branch stocks every item", `SELECT count(*) FROM branches b CROSS JOIN items i
+			WHERE NOT EXISTS (SELECT 1 FROM stock_levels s WHERE s.branch_id = b.id AND s.item_id = i.id)`},
+		{"movement cost matches item cost", `SELECT count(*) FROM inventory_movements m
+			JOIN items i ON i.id = m.item_id WHERE m.unit_cost_cents <> i.unit_cost_cents`},
+		{"one sale movement per completed sale line, none for cancelled", `SELECT count(*) FROM sale_lines l
+			JOIN sales s ON s.id = l.sale_id LEFT JOIN inventory_movements m ON m.sale_line_id = l.id
+			WHERE (s.status = 'completed') <> (m.id IS NOT NULL)
+			OR m.quantity <> -l.quantity OR m.item_id <> l.item_id OR m.branch_id <> s.branch_id OR m.moved_at <> s.sold_at`},
+		{"ledger sale quantity equals completed sale lines", `SELECT count(*) FROM (SELECT
+			(SELECT -sum(quantity) FROM inventory_movements WHERE kind = 'sale') AS ledger,
+			(SELECT sum(l.quantity) FROM sale_lines l JOIN sales s ON s.id = l.sale_id WHERE s.status = 'completed') AS sold) x
+			WHERE ledger <> sold`},
+		{"one return movement per return line", `SELECT count(*) FROM sale_return_lines rl
+			JOIN sale_returns r ON r.id = rl.return_id JOIN sale_lines l ON l.id = rl.sale_line_id
+			JOIN sales s ON s.id = r.sale_id LEFT JOIN inventory_movements m ON m.sale_return_line_id = rl.id
+			WHERE m.id IS NULL OR m.quantity <> rl.quantity OR m.item_id <> l.item_id
+			OR m.branch_id <> s.branch_id OR m.moved_at <> r.returned_at`},
+		{"no stock level negative", `SELECT count(*) FROM stock_levels WHERE quantity < 0`},
+		{"stock never negative", `SELECT count(*) FROM (
+			SELECT sum(quantity) OVER (PARTITION BY branch_id, item_id ORDER BY moved_at, id) AS balance
+			FROM inventory_movements) x WHERE balance < 0`},
+		{"one receipt per received order line, none for open orders", `SELECT count(*) FROM purchase_order_lines pl
+			JOIN purchase_orders po ON po.id = pl.purchase_order_id
+			LEFT JOIN inventory_movements m ON m.purchase_order_line_id = pl.id
+			WHERE (po.status = 'received') <> (m.id IS NOT NULL)
+			OR m.quantity <> pl.quantity OR m.item_id <> pl.item_id OR m.branch_id <> po.branch_id OR m.moved_at <> po.received_at`},
+		{"every receipt matches a purchase order line", `SELECT count(*) FROM inventory_movements
+			WHERE kind = 'receipt' AND purchase_order_line_id IS NULL`},
+		{"transfers move one item between two branches of a city", `SELECT count(*) FROM (
+			SELECT m.reference FROM inventory_movements m JOIN branches b ON b.id = m.branch_id
+			WHERE m.kind IN ('transfer_out', 'transfer_in') GROUP BY m.reference
+			HAVING count(*) <> 2 OR sum(m.quantity) <> 0 OR count(DISTINCT m.branch_id) <> 2
+			OR count(DISTINCT m.item_id) <> 1 OR count(DISTINCT b.city) <> 1) x`},
+		{"count adjustments are shrinkage", `SELECT count(*) FROM inventory_movements
+			WHERE kind = 'adjustment' AND quantity >= 0`},
 	})
 
 	first := fingerprint(t, db)
@@ -191,6 +243,12 @@ func TestWriteErrors(t *testing.T) {
 		{"payment", func(ds *Dataset) { ds.Sales[0].Payments[0].Method = "cheque" }},
 		{"return", func(ds *Dataset) { ds.Returns[0].TotalCents++ }},
 		{"return line", func(ds *Dataset) { ds.Returns[0].Lines = append(ds.Returns[0].Lines, ds.Returns[0].Lines[0]) }},
+		{"supplier", func(ds *Dataset) { ds.Suppliers[1].Code = ds.Suppliers[0].Code }},
+		{"purchase order", func(ds *Dataset) { ds.PurchaseOrders[1].Folio = ds.PurchaseOrders[0].Folio }},
+		{"purchase order line", func(ds *Dataset) {
+			ds.PurchaseOrders[0].Lines = append(ds.PurchaseOrders[0].Lines, ds.PurchaseOrders[0].Lines[0])
+		}},
+		{"opening movement", func(ds *Dataset) { ds.Movements[0].Quantity = -1 }},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -239,5 +297,7 @@ func TestWriteSalesPatterns(t *testing.T) {
 			WHERE NOT EXISTS (SELECT 1 FROM sale_payments GROUP BY sale_id HAVING count(*) > 1)`},
 		{"some employees left", `SELECT count(*) FROM (SELECT 1) x
 			WHERE NOT EXISTS (SELECT 1 FROM employees WHERE terminated_on IS NOT NULL)`},
-	})
+		{"some transfers and shrinkage", `SELECT count(*) FROM (SELECT 1) x
+			WHERE NOT EXISTS (SELECT 1 FROM inventory_movements WHERE kind = 'transfer_in')
+			OR NOT EXISTS (SELECT 1 FROM inventory_movements WHERE kind = 'adjustment')`}})
 }

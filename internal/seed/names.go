@@ -58,6 +58,25 @@ var materials = []materialDef{
 	{"ORO18", "oro 18k", 4000, 60000},
 }
 
+type supplierDef struct {
+	Code, Name, City string
+	LeadTimeDays     int
+}
+
+// supplierDefs make the jewelry of one or two materials each; the last one
+// distributes every watch.
+var supplierDefs = []supplierDef{
+	{"PR01", "Platería Hermanos Castillo", "Taxco", 4},
+	{"PR02", "Orfebres Unidos de Jalisco", "Guadalajara", 5},
+	{"PR03", "Oro Fino del Bajío", "León", 7},
+	{"PR04", "Distribuidora Relojera del Norte", "Monterrey", 3},
+}
+
+// materialSuppliers index supplierDefs, in the order of materials.
+var materialSuppliers = []int{0, 1, 1, 2}
+
+const watchSupplier = 3
+
 var firstNames = []string{
 	"Ana", "María", "Guadalupe", "Fernanda", "Sofía", "Daniela", "Valeria", "Mariana", "Gabriela", "Alejandra",
 	"José", "Luis", "Juan", "Carlos", "Jorge", "Miguel", "Alejandro", "Ricardo", "Fernando", "Diego",

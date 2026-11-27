@@ -21,19 +21,27 @@ SELECT
     (SELECT count(*) FROM sale_lines) AS sale_lines,
     (SELECT count(*) FROM sale_payments) AS sale_payments,
     (SELECT count(*) FROM sale_returns) AS sale_returns,
-    (SELECT count(*) FROM sale_return_lines) AS sale_return_lines
+    (SELECT count(*) FROM sale_return_lines) AS sale_return_lines,
+    (SELECT count(*) FROM suppliers) AS suppliers,
+    (SELECT count(*) FROM purchase_orders) AS purchase_orders,
+    (SELECT count(*) FROM purchase_order_lines) AS purchase_order_lines,
+    (SELECT count(*) FROM inventory_movements) AS inventory_movements
 `
 
 type CountSeedRowsRow struct {
-	Branches        int64
-	Categories      int64
-	Items           int64
-	Employees       int64
-	Sales           int64
-	SaleLines       int64
-	SalePayments    int64
-	SaleReturns     int64
-	SaleReturnLines int64
+	Branches           int64
+	Categories         int64
+	Items              int64
+	Employees          int64
+	Sales              int64
+	SaleLines          int64
+	SalePayments       int64
+	SaleReturns        int64
+	SaleReturnLines    int64
+	Suppliers          int64
+	PurchaseOrders     int64
+	PurchaseOrderLines int64
+	InventoryMovements int64
 }
 
 func (q *Queries) CountSeedRows(ctx context.Context) (CountSeedRowsRow, error) {
@@ -49,8 +57,29 @@ func (q *Queries) CountSeedRows(ctx context.Context) (CountSeedRowsRow, error) {
 		&i.SalePayments,
 		&i.SaleReturns,
 		&i.SaleReturnLines,
+		&i.Suppliers,
+		&i.PurchaseOrders,
+		&i.PurchaseOrderLines,
+		&i.InventoryMovements,
 	)
 	return i, err
+}
+
+const getStockLevel = `-- name: GetStockLevel :one
+SELECT quantity FROM stock_levels
+WHERE branch_id = $1 AND item_id = $2
+`
+
+type GetStockLevelParams struct {
+	BranchID int64
+	ItemID   int64
+}
+
+func (q *Queries) GetStockLevel(ctx context.Context, arg GetStockLevelParams) (int64, error) {
+	row := q.db.QueryRowContext(ctx, getStockLevel, arg.BranchID, arg.ItemID)
+	var quantity int64
+	err := row.Scan(&quantity)
+	return quantity, err
 }
 
 const insertBranch = `-- name: InsertBranch :one
@@ -131,6 +160,46 @@ func (q *Queries) InsertEmployee(ctx context.Context, arg InsertEmployeeParams) 
 	return id, err
 }
 
+const insertInventoryMovement = `-- name: InsertInventoryMovement :one
+INSERT INTO inventory_movements (
+    branch_id, item_id, moved_at, kind, quantity, unit_cost_cents, reference,
+    sale_line_id, sale_return_line_id, purchase_order_line_id
+)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+RETURNING id
+`
+
+type InsertInventoryMovementParams struct {
+	BranchID            int64
+	ItemID              int64
+	MovedAt             time.Time
+	Kind                string
+	Quantity            int32
+	UnitCostCents       int64
+	Reference           string
+	SaleLineID          sql.NullInt64
+	SaleReturnLineID    sql.NullInt64
+	PurchaseOrderLineID sql.NullInt64
+}
+
+func (q *Queries) InsertInventoryMovement(ctx context.Context, arg InsertInventoryMovementParams) (int64, error) {
+	row := q.db.QueryRowContext(ctx, insertInventoryMovement,
+		arg.BranchID,
+		arg.ItemID,
+		arg.MovedAt,
+		arg.Kind,
+		arg.Quantity,
+		arg.UnitCostCents,
+		arg.Reference,
+		arg.SaleLineID,
+		arg.SaleReturnLineID,
+		arg.PurchaseOrderLineID,
+	)
+	var id int64
+	err := row.Scan(&id)
+	return id, err
+}
+
 const insertItem = `-- name: InsertItem :one
 INSERT INTO items (sku, category_id, name, material, unit_cost_cents, list_price_cents, active)
 VALUES ($1, $2, $3, $4, $5, $6, $7)
@@ -156,6 +225,62 @@ func (q *Queries) InsertItem(ctx context.Context, arg InsertItemParams) (int64, 
 		arg.UnitCostCents,
 		arg.ListPriceCents,
 		arg.Active,
+	)
+	var id int64
+	err := row.Scan(&id)
+	return id, err
+}
+
+const insertPurchaseOrder = `-- name: InsertPurchaseOrder :one
+INSERT INTO purchase_orders (folio, supplier_id, branch_id, ordered_at, received_at, status)
+VALUES ($1, $2, $3, $4, $5, $6)
+RETURNING id
+`
+
+type InsertPurchaseOrderParams struct {
+	Folio      string
+	SupplierID int64
+	BranchID   int64
+	OrderedAt  time.Time
+	ReceivedAt sql.NullTime
+	Status     string
+}
+
+func (q *Queries) InsertPurchaseOrder(ctx context.Context, arg InsertPurchaseOrderParams) (int64, error) {
+	row := q.db.QueryRowContext(ctx, insertPurchaseOrder,
+		arg.Folio,
+		arg.SupplierID,
+		arg.BranchID,
+		arg.OrderedAt,
+		arg.ReceivedAt,
+		arg.Status,
+	)
+	var id int64
+	err := row.Scan(&id)
+	return id, err
+}
+
+const insertPurchaseOrderLine = `-- name: InsertPurchaseOrderLine :one
+INSERT INTO purchase_order_lines (purchase_order_id, line_no, item_id, quantity, unit_cost_cents)
+VALUES ($1, $2, $3, $4, $5)
+RETURNING id
+`
+
+type InsertPurchaseOrderLineParams struct {
+	PurchaseOrderID int64
+	LineNo          int32
+	ItemID          int64
+	Quantity        int32
+	UnitCostCents   int64
+}
+
+func (q *Queries) InsertPurchaseOrderLine(ctx context.Context, arg InsertPurchaseOrderLineParams) (int64, error) {
+	row := q.db.QueryRowContext(ctx, insertPurchaseOrderLine,
+		arg.PurchaseOrderID,
+		arg.LineNo,
+		arg.ItemID,
+		arg.Quantity,
+		arg.UnitCostCents,
 	)
 	var id int64
 	err := row.Scan(&id)
@@ -316,8 +441,34 @@ func (q *Queries) InsertSaleReturnLine(ctx context.Context, arg InsertSaleReturn
 	return id, err
 }
 
+const insertSupplier = `-- name: InsertSupplier :one
+INSERT INTO suppliers (code, name, city, lead_time_days)
+VALUES ($1, $2, $3, $4)
+RETURNING id
+`
+
+type InsertSupplierParams struct {
+	Code         string
+	Name         string
+	City         string
+	LeadTimeDays int32
+}
+
+func (q *Queries) InsertSupplier(ctx context.Context, arg InsertSupplierParams) (int64, error) {
+	row := q.db.QueryRowContext(ctx, insertSupplier,
+		arg.Code,
+		arg.Name,
+		arg.City,
+		arg.LeadTimeDays,
+	)
+	var id int64
+	err := row.Scan(&id)
+	return id, err
+}
+
 const resetSeedData = `-- name: ResetSeedData :exec
-TRUNCATE sale_return_lines, sale_returns, sale_payments,
+TRUNCATE inventory_movements, purchase_order_lines, purchase_orders, suppliers,
+    sale_return_lines, sale_returns, sale_payments,
     sale_lines, sales, employees, items, categories, branches RESTART IDENTITY
 `
 

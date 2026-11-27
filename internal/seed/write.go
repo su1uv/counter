@@ -102,7 +102,8 @@ func insert(ctx context.Context, q *store.Queries, ds Dataset) error {
 		}
 	}
 
-	for _, ret := range ds.Returns {
+	returnLineIDs := make([][]int64, len(ds.Returns))
+	for i, ret := range ds.Returns {
 		returnID, err := q.InsertSaleReturn(ctx, store.InsertSaleReturnParams{
 			Folio: ret.Folio, SaleID: saleIDs[ret.Sale], EmployeeID: employeeIDs[ret.Employee], ReturnedAt: ret.ReturnedAt,
 			SubtotalCents: ret.SubtotalCents, TaxCents: ret.TaxCents, TotalCents: ret.TotalCents,
@@ -110,13 +111,67 @@ func insert(ctx context.Context, q *store.Queries, ds Dataset) error {
 		if err != nil {
 			return fmt.Errorf("insert return %s: %w", ret.Folio, err)
 		}
-		for _, l := range ret.Lines {
-			if _, err := q.InsertSaleReturnLine(ctx, store.InsertSaleReturnLineParams{
+		returnLineIDs[i] = make([]int64, len(ret.Lines))
+		for j, l := range ret.Lines {
+			lineID, err := q.InsertSaleReturnLine(ctx, store.InsertSaleReturnLineParams{
 				ReturnID: returnID, LineNo: int32(l.LineNo), SaleLineID: lineIDs[ret.Sale][l.SaleLine],
 				Quantity: int32(l.Quantity), RefundCents: l.RefundCents,
-			}); err != nil {
+			})
+			if err != nil {
 				return fmt.Errorf("insert return %s line %d: %w", ret.Folio, l.LineNo, err)
 			}
+			returnLineIDs[i][j] = lineID
+		}
+	}
+
+	supplierIDs := make([]int64, len(ds.Suppliers))
+	for i, s := range ds.Suppliers {
+		id, err := q.InsertSupplier(ctx, store.InsertSupplierParams{
+			Code: s.Code, Name: s.Name, City: s.City, LeadTimeDays: int32(s.LeadTimeDays),
+		})
+		if err != nil {
+			return fmt.Errorf("insert supplier %s: %w", s.Code, err)
+		}
+		supplierIDs[i] = id
+	}
+
+	orderLineIDs := make([][]int64, len(ds.PurchaseOrders))
+	for i, po := range ds.PurchaseOrders {
+		orderID, err := q.InsertPurchaseOrder(ctx, store.InsertPurchaseOrderParams{
+			Folio: po.Folio, SupplierID: supplierIDs[po.Supplier], BranchID: branchIDs[po.Branch], OrderedAt: po.OrderedAt,
+			ReceivedAt: sql.NullTime{Time: po.ReceivedAt, Valid: !po.ReceivedAt.IsZero()}, Status: po.Status,
+		})
+		if err != nil {
+			return fmt.Errorf("insert purchase order %s: %w", po.Folio, err)
+		}
+		orderLineIDs[i] = make([]int64, len(po.Lines))
+		for j, l := range po.Lines {
+			lineID, err := q.InsertPurchaseOrderLine(ctx, store.InsertPurchaseOrderLineParams{
+				PurchaseOrderID: orderID, LineNo: int32(l.LineNo), ItemID: itemIDs[l.Item],
+				Quantity: int32(l.Quantity), UnitCostCents: l.UnitCostCents,
+			})
+			if err != nil {
+				return fmt.Errorf("insert purchase order %s line %d: %w", po.Folio, l.LineNo, err)
+			}
+			orderLineIDs[i][j] = lineID
+		}
+	}
+
+	for _, m := range ds.Movements {
+		p := store.InsertInventoryMovementParams{
+			BranchID: branchIDs[m.Branch], ItemID: itemIDs[m.Item], MovedAt: m.MovedAt, Kind: m.Kind,
+			Quantity: int32(m.Quantity), UnitCostCents: m.UnitCostCents, Reference: m.Reference,
+		}
+		switch m.Kind {
+		case "sale":
+			p.SaleLineID = sql.NullInt64{Int64: lineIDs[m.Doc][m.Line], Valid: true}
+		case "return":
+			p.SaleReturnLineID = sql.NullInt64{Int64: returnLineIDs[m.Doc][m.Line], Valid: true}
+		case "receipt":
+			p.PurchaseOrderLineID = sql.NullInt64{Int64: orderLineIDs[m.Doc][m.Line], Valid: true}
+		}
+		if _, err := q.InsertInventoryMovement(ctx, p); err != nil {
+			return fmt.Errorf("insert %s movement %s: %w", m.Kind, m.Reference, err)
 		}
 	}
 	return nil

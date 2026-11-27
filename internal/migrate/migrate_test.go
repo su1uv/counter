@@ -59,27 +59,31 @@ var (
 	realismTables = []string{"sale_payments", "sale_returns", "sale_return_lines"}
 	// realismColumns are added to retail tables by 00003.
 	realismColumns = [][2]string{{"branches", "tier"}, {"employees", "terminated_on"}, {"sales", "status"}}
+	// inventoryTables come from 00004; stock_levels is a view.
+	inventoryTables = []string{"suppliers", "purchase_orders", "purchase_order_lines", "inventory_movements", "stock_levels"}
 )
 
 func TestRunLifecycle(t *testing.T) {
 	db := openTestDB(t)
 	ctx := context.Background()
 	var out bytes.Buffer
-	all := []string{"00001_schema_probe.sql", "00002_retail_core.sql", "00003_sales_realism.sql"}
+	all := []string{"00001_schema_probe.sql", "00002_retail_core.sql", "00003_sales_realism.sql", "00004_inventory.sql"}
 
 	steps := []struct {
-		command     string
-		wantOut     []string
-		wantProbe   bool
-		wantRetail  bool
-		wantRealism bool
+		command       string
+		wantOut       []string
+		wantProbe     bool
+		wantRetail    bool
+		wantRealism   bool
+		wantInventory bool
 	}{
-		{"up", all, true, true, true},
-		{"status", all, true, true, true},
-		{"down", []string{"00003_sales_realism.sql"}, true, true, false},
-		{"down", []string{"00002_retail_core.sql"}, true, false, false},
-		{"down", []string{"00001_schema_probe.sql"}, false, false, false},
-		{"up", all, true, true, true},
+		{"up", all, true, true, true, true},
+		{"status", all, true, true, true, true},
+		{"down", []string{"00004_inventory.sql"}, true, true, true, false},
+		{"down", []string{"00003_sales_realism.sql"}, true, true, false, false},
+		{"down", []string{"00002_retail_core.sql"}, true, false, false, false},
+		{"down", []string{"00001_schema_probe.sql"}, false, false, false, false},
+		{"up", all, true, true, true, true},
 	}
 	downAll(ctx, db)
 	t.Cleanup(func() { downAll(ctx, db) })
@@ -109,6 +113,11 @@ func TestRunLifecycle(t *testing.T) {
 		for _, c := range realismColumns {
 			if got := columnExists(t, db, c[0], c[1]); got != s.wantRealism {
 				t.Fatalf("after %s: %s.%s exists = %v, want %v", s.command, c[0], c[1], got, s.wantRealism)
+			}
+		}
+		for _, table := range inventoryTables {
+			if got := tableExists(t, db, table); got != s.wantInventory {
+				t.Fatalf("after %s: %s exists = %v, want %v", s.command, table, got, s.wantInventory)
 			}
 		}
 	}

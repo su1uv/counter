@@ -36,6 +36,20 @@ type Employee struct {
 	TerminatedOn sql.NullTime
 }
 
+type InventoryMovement struct {
+	ID                  int64
+	BranchID            int64
+	ItemID              int64
+	MovedAt             time.Time
+	Kind                string
+	Quantity            int32
+	UnitCostCents       int64
+	Reference           string
+	SaleLineID          sql.NullInt64
+	SaleReturnLineID    sql.NullInt64
+	PurchaseOrderLineID sql.NullInt64
+}
+
 type Item struct {
 	ID             int64
 	Sku            string
@@ -45,6 +59,25 @@ type Item struct {
 	UnitCostCents  int64
 	ListPriceCents int64
 	Active         bool
+}
+
+type PurchaseOrder struct {
+	ID         int64
+	Folio      string
+	SupplierID int64
+	BranchID   int64
+	OrderedAt  time.Time
+	ReceivedAt sql.NullTime
+	Status     string
+}
+
+type PurchaseOrderLine struct {
+	ID              int64
+	PurchaseOrderID int64
+	LineNo          int32
+	ItemID          int64
+	Quantity        int32
+	UnitCostCents   int64
 }
 
 type Sale struct {
@@ -102,4 +135,18 @@ type SaleReturnLine struct {
 
 type SchemaProbe struct {
 	ID int64
+}
+
+type StockLevel struct {
+	BranchID int64
+	ItemID   int64
+	Quantity int64
+}
+
+type Supplier struct {
+	ID           int64
+	Code         string
+	Name         string
+	City         string
+	LeadTimeDays int32
 }

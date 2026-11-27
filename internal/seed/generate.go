@@ -24,80 +24,24 @@ func Generate(cfg Config) (Dataset, error) {
 	ds.Items = generateItems(r, cfg.Items)
 	ds.Employees = generateEmployees(r, cfg, ds.Branches, start)
 	loc, _ := time.LoadLocation(cfg.Timezone) // checked by Validate
-	ds.Sales = generateSales(r, cfg, loc, start, ds)
-	ds.Returns = generateReturns(r, cfg, loc, start, ds)
+	base, mix := branchDemand(r, cfg, ds.Branches, ds.Items)
+	policies := stockPolicies(base, mix)
+	ds.Movements = openingStock(ds, policies, time.Date(start.Year(), start.Month(), start.Day(), 0, 0, 0, 0, loc))
+	ds.Suppliers = generateSuppliers()
+	newSimulation(r, cfg, loc, start, &ds, base, mix, policies).run(start)
 	return ds, nil
 }
 
-// staffByBranch lists each branch's employees as indexes into employees.
-func staffByBranch(branches []Branch, employees []Employee) [][]int {
-	staff := make([][]int, len(branches))
-	for i, e := range employees {
-		staff[e.Branch] = append(staff[e.Branch], i)
-	}
-	return staff
-}
-
-// pickOnDuty picks one of the staff on duty on day, weighted by
-// productivity.
-func pickOnDuty(r *rand.Rand, employees []Employee, staff []int, day time.Time) int {
-	duty := onDuty(employees, staff, day)
-	weights := make([]int, len(duty))
-	for i, e := range duty {
-		weights[i] = employees[e].Weight
-	}
-	return duty[weightedIndex(r, weights)]
-}
-
-// generateSales walks the window day by day. Each branch's daily count
-// follows its tier's base rate and the calendar (see dailySales), and sale
-// times follow the hourly curve. Each sale is by an employee on duty,
-// weighted by productivity. Folios run per branch in time order. A few
-// sales are cancelled the same day; they keep their lines but have no
-// payments.
-func generateSales(r *rand.Rand, cfg Config, loc *time.Location, start time.Time, ds Dataset) []Sale {
-	staff := staffByBranch(ds.Branches, ds.Employees)
-	base := make([]int, len(ds.Branches))
-	mix := make([][]int, len(ds.Branches))
-	for b, branch := range ds.Branches {
+// branchDemand picks each branch's base daily sales by tier, and weighs
+// every item for the branch's tier.
+func branchDemand(r *rand.Rand, cfg Config, branches []Branch, items []Item) (base []int, mix [][]int) {
+	base = make([]int, len(branches))
+	mix = make([][]int, len(branches))
+	for b, branch := range branches {
 		base[b] = tierBase(r, cfg, tiers[branch.Tier])
-		mix[b] = itemWeights(tiers[branch.Tier], ds.Items)
+		mix[b] = itemWeights(tiers[branch.Tier], items)
 	}
-	folios := make([]int, len(ds.Branches))
-	end := start.AddDate(0, cfg.Months, 0)
-	var out []Sale
-	for day := start; day.Before(end); day = day.AddDate(0, 0, 1) {
-		y, m, d := day.Date()
-		for b, branch := range ds.Branches {
-			times := make([]int, dailySales(r, base[b], day))
-			for i := range times {
-				times[i] = saleSecond(r)
-			}
-			slices.Sort(times)
-			for _, sec := range times {
-				folios[b]++
-				sale := Sale{
-					Folio:    fmt.Sprintf("%s-%06d", branch.Code, folios[b]),
-					Branch:   b,
-					Employee: pickOnDuty(r, ds.Employees, staff[b], day),
-					SoldAt:   time.Date(y, m, d, 0, 0, sec, 0, loc),
-					Status:   "completed",
-					Lines:    generateLines(r, ds.Items, mix[b]),
-				}
-				for _, l := range sale.Lines {
-					sale.TotalCents += l.TotalCents
-				}
-				sale.SubtotalCents, sale.TaxCents = SplitTax(sale.TotalCents, ivaBP)
-				if r.IntN(1000) < cancelPerMille {
-					sale.Status = "cancelled"
-				} else {
-					sale.Payments = generatePayments(r, sale.TotalCents)
-				}
-				out = append(out, sale)
-			}
-		}
-	}
-	return out
+	return base, mix
 }
 
 // Basket shape. Index i of basketWeights is the weight of i+1 lines, and
@@ -112,36 +56,64 @@ var (
 const discountLinePercent = 10
 
 // generateLines picks distinct items by the branch's item weights, at list
-// price, with an occasional percentage discount off the line.
-func generateLines(r *rand.Rand, items []Item, weights []int) []SaleLine {
+// price, with an occasional percentage discount off the line. An item with
+// fewer than the wanted units on hand is swapped for a substitute; with
+// none, the line is lost. It returns nil if every line is lost.
+func generateLines(r *rand.Rand, items []Item, weights, onHand []int) []SaleLine {
 	n := min(1+weightedIndex(r, basketWeights), len(items))
-	picked := make([]int, 0, n)
-	for len(picked) < n {
-		if i := weightedIndex(r, weights); !slices.Contains(picked, i) {
-			picked = append(picked, i)
+	used := make([]int, 0, 2*n) // items asked for or sold in this sale
+	var lines []SaleLine
+	for range n {
+		if len(used) == len(items) {
+			break
 		}
-	}
-	lines := make([]SaleLine, n)
-	for i, item := range picked {
-		it := items[item]
+		item := weightedIndex(r, weights)
+		for slices.Contains(used, item) {
+			item = weightedIndex(r, weights)
+		}
+		used = append(used, item)
 		qty := 1 + weightedIndex(r, quantityWeights)
+		if onHand[item] < qty {
+			if item = substitute(r, items, weights, onHand, used, item, qty); item < 0 {
+				continue
+			}
+			used = append(used, item)
+		}
+		it := items[item]
 		gross := int64(qty) * it.ListPriceCents
 		var discount int64
 		if r.IntN(100) < discountLinePercent {
 			pct := discountPercents[r.IntN(len(discountPercents))]
 			discount = divRoundHalfUp(gross*int64(pct), 100)
 		}
-		lines[i] = SaleLine{
-			LineNo:         i + 1,
+		lines = append(lines, SaleLine{
+			LineNo:         len(lines) + 1,
 			Item:           item,
 			Quantity:       qty,
 			UnitPriceCents: it.ListPriceCents,
 			UnitCostCents:  it.UnitCostCents,
 			DiscountCents:  discount,
 			TotalCents:     gross - discount,
-		}
+		})
 	}
 	return lines
+}
+
+// substitute picks, by weight, an item of the same category as item that
+// is not used in the sale yet and has qty units on hand. It returns -1 if
+// there is none.
+func substitute(r *rand.Rand, items []Item, weights, onHand, used []int, item, qty int) int {
+	var candidates, candidateWeights []int
+	for i, it := range items {
+		if it.Category == items[item].Category && onHand[i] >= qty && !slices.Contains(used, i) {
+			candidates = append(candidates, i)
+			candidateWeights = append(candidateWeights, weights[i])
+		}
+	}
+	if candidates == nil {
+		return -1
+	}
+	return candidates[weightedIndex(r, candidateWeights)]
 }
 
 func generateCategories() []Category {
