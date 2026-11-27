@@ -1,6 +1,6 @@
 # Counter
 
-Counter is a Go service. A store manager asks, in Spanish or English, a question such as "¿Por qué bajó el margen en la tienda Centro esta semana?" An agent answers by calling typed SQL tools over sales, inventory, and cash-register data, and by retrieving passages from operating manuals and public SAT CFDI guides. Answers include citations.
+Counter is a Go service. A store manager asks, in Spanish or English, a question such as "¿Por qué bajó el margen en la tienda Centro esta semana?" An agent answers by calling typed SQL tools over sales, inventory, cash-register, and customer invoice data, and by retrieving passages from operating manuals and public SAT CFDI guides. Answers include citations.
 
 ## How work is done
 

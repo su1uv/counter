@@ -28,7 +28,9 @@ SELECT
     (SELECT count(*) FROM inventory_movements) AS inventory_movements,
     (SELECT count(*) FROM cash_registers) AS cash_registers,
     (SELECT count(*) FROM register_shifts) AS register_shifts,
-    (SELECT count(*) FROM cash_movements) AS cash_movements
+    (SELECT count(*) FROM cash_movements) AS cash_movements,
+    (SELECT count(*) FROM customers) AS customers,
+    (SELECT count(*) FROM invoices) AS invoices
 `
 
 type CountSeedRowsRow struct {
@@ -48,6 +50,8 @@ type CountSeedRowsRow struct {
 	CashRegisters      int64
 	RegisterShifts     int64
 	CashMovements      int64
+	Customers          int64
+	Invoices           int64
 }
 
 func (q *Queries) CountSeedRows(ctx context.Context) (CountSeedRowsRow, error) {
@@ -70,6 +74,8 @@ func (q *Queries) CountSeedRows(ctx context.Context) (CountSeedRowsRow, error) {
 		&i.CashRegisters,
 		&i.RegisterShifts,
 		&i.CashMovements,
+		&i.Customers,
+		&i.Invoices,
 	)
 	return i, err
 }
@@ -186,6 +192,33 @@ func (q *Queries) InsertCategory(ctx context.Context, arg InsertCategoryParams) 
 	return id, err
 }
 
+const insertCustomer = `-- name: InsertCustomer :one
+INSERT INTO customers (code, rfc, legal_name, tax_regime, postal_code)
+VALUES ($1, $2, $3, $4, $5)
+RETURNING id
+`
+
+type InsertCustomerParams struct {
+	Code       string
+	Rfc        string
+	LegalName  string
+	TaxRegime  string
+	PostalCode string
+}
+
+func (q *Queries) InsertCustomer(ctx context.Context, arg InsertCustomerParams) (int64, error) {
+	row := q.db.QueryRowContext(ctx, insertCustomer,
+		arg.Code,
+		arg.Rfc,
+		arg.LegalName,
+		arg.TaxRegime,
+		arg.PostalCode,
+	)
+	var id int64
+	err := row.Scan(&id)
+	return id, err
+}
+
 const insertEmployee = `-- name: InsertEmployee :one
 INSERT INTO employees (code, branch_id, full_name, role, hired_on, terminated_on)
 VALUES ($1, $2, $3, $4, $5, $6)
@@ -249,6 +282,37 @@ func (q *Queries) InsertInventoryMovement(ctx context.Context, arg InsertInvento
 		arg.SaleLineID,
 		arg.SaleReturnLineID,
 		arg.PurchaseOrderLineID,
+	)
+	var id int64
+	err := row.Scan(&id)
+	return id, err
+}
+
+const insertInvoice = `-- name: InsertInvoice :one
+INSERT INTO invoices (sale_id, customer_id, uuid, cfdi_use, payment_form, payment_method, issued_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
+RETURNING id
+`
+
+type InsertInvoiceParams struct {
+	SaleID        int64
+	CustomerID    int64
+	Uuid          string
+	CfdiUse       string
+	PaymentForm   string
+	PaymentMethod string
+	IssuedAt      time.Time
+}
+
+func (q *Queries) InsertInvoice(ctx context.Context, arg InsertInvoiceParams) (int64, error) {
+	row := q.db.QueryRowContext(ctx, insertInvoice,
+		arg.SaleID,
+		arg.CustomerID,
+		arg.Uuid,
+		arg.CfdiUse,
+		arg.PaymentForm,
+		arg.PaymentMethod,
+		arg.IssuedAt,
 	)
 	var id int64
 	err := row.Scan(&id)
@@ -558,7 +622,8 @@ func (q *Queries) InsertSupplier(ctx context.Context, arg InsertSupplierParams) 
 }
 
 const resetSeedData = `-- name: ResetSeedData :exec
-TRUNCATE cash_movements, register_shifts, cash_registers,
+TRUNCATE invoices, customers,
+    cash_movements, register_shifts, cash_registers,
     inventory_movements, purchase_order_lines, purchase_orders, suppliers,
     sale_return_lines, sale_returns, sale_payments,
     sale_lines, sales, employees, items, categories, branches RESTART IDENTITY

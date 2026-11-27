@@ -30,6 +30,8 @@ func Generate(cfg Config) (Dataset, error) {
 	ds.Movements = openingStock(ds, policies, time.Date(start.Year(), start.Month(), start.Day(), 0, 0, 0, 0, loc))
 	ds.Suppliers = generateSuppliers()
 	newSimulation(r, cfg, loc, start, &ds, base, mix, policies).run(start)
+	ds.Customers = generateCustomers(r, cfg.Branches)
+	ds.Invoices = generateInvoices(r, ds.Sales, ds.Customers)
 	return ds, nil
 }
 
