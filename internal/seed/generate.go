@@ -38,8 +38,10 @@ func generateSales(r *rand.Rand, cfg Config, loc *time.Location, start time.Time
 		staff[e.Branch] = append(staff[e.Branch], i)
 	}
 	base := make([]int, len(ds.Branches))
+	mix := make([][]int, len(ds.Branches))
 	for b, branch := range ds.Branches {
 		base[b] = tierBase(r, cfg, tiers[branch.Tier])
+		mix[b] = itemWeights(tiers[branch.Tier], ds.Items)
 	}
 	folios := make([]int, len(ds.Branches))
 	end := start.AddDate(0, cfg.Months, 0)
@@ -65,7 +67,7 @@ func generateSales(r *rand.Rand, cfg Config, loc *time.Location, start time.Time
 					Employee: duty[weightedIndex(r, weights)],
 					SoldAt:   time.Date(y, m, d, 0, 0, sec, 0, loc),
 					Status:   "completed",
-					Lines:    generateLines(r, ds.Items),
+					Lines:    generateLines(r, ds.Items, mix[b]),
 				}
 				for _, l := range sale.Lines {
 					sale.TotalCents += l.TotalCents
@@ -78,25 +80,45 @@ func generateSales(r *rand.Rand, cfg Config, loc *time.Location, start time.Time
 	return out
 }
 
-// generateLines picks 1 to 3 distinct items, one unit each, at list price.
-func generateLines(r *rand.Rand, items []Item) []SaleLine {
-	n := min(1+r.IntN(3), len(items))
+// Basket shape. Index i of basketWeights is the weight of i+1 lines, and
+// likewise for quantityWeights and units per line.
+var (
+	basketWeights    = []int{70, 22, 8}
+	quantityWeights  = []int{92, 6, 2}
+	discountPercents = []int{5, 10, 15, 20}
+)
+
+// discountLinePercent is the share of lines that get a discount.
+const discountLinePercent = 10
+
+// generateLines picks distinct items by the branch's item weights, at list
+// price, with an occasional percentage discount off the line.
+func generateLines(r *rand.Rand, items []Item, weights []int) []SaleLine {
+	n := min(1+weightedIndex(r, basketWeights), len(items))
 	picked := make([]int, 0, n)
 	for len(picked) < n {
-		if i := r.IntN(len(items)); !slices.Contains(picked, i) {
+		if i := weightedIndex(r, weights); !slices.Contains(picked, i) {
 			picked = append(picked, i)
 		}
 	}
 	lines := make([]SaleLine, n)
 	for i, item := range picked {
 		it := items[item]
+		qty := 1 + weightedIndex(r, quantityWeights)
+		gross := int64(qty) * it.ListPriceCents
+		var discount int64
+		if r.IntN(100) < discountLinePercent {
+			pct := discountPercents[r.IntN(len(discountPercents))]
+			discount = divRoundHalfUp(gross*int64(pct), 100)
+		}
 		lines[i] = SaleLine{
 			LineNo:         i + 1,
 			Item:           item,
-			Quantity:       1,
+			Quantity:       qty,
 			UnitPriceCents: it.ListPriceCents,
 			UnitCostCents:  it.UnitCostCents,
-			TotalCents:     it.ListPriceCents,
+			DiscountCents:  discount,
+			TotalCents:     gross - discount,
 		}
 	}
 	return lines

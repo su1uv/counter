@@ -255,8 +255,11 @@ func TestGenerateSales(t *testing.T) {
 					}
 					seen[l.Item] = true
 					it := ds.Items[l.Item]
-					if l.Quantity < 1 || l.UnitPriceCents != it.ListPriceCents || l.UnitCostCents != it.UnitCostCents || l.DiscountCents != 0 {
+					if l.Quantity < 1 || l.Quantity > len(quantityWeights) || l.UnitPriceCents != it.ListPriceCents || l.UnitCostCents != it.UnitCostCents {
 						t.Fatalf("sale %s line %+v does not match item %+v", s.Folio, l, it)
+					}
+					if !validDiscount(int64(l.Quantity)*l.UnitPriceCents, l.DiscountCents) {
+						t.Fatalf("sale %s line %d discount %d is not a listed percentage", s.Folio, l.LineNo, l.DiscountCents)
 					}
 					if l.TotalCents != int64(l.Quantity)*l.UnitPriceCents-l.DiscountCents {
 						t.Fatalf("sale %s line %d total %d", s.Folio, l.LineNo, l.TotalCents)
@@ -385,5 +388,53 @@ func TestBranchTiersAndStaff(t *testing.T) {
 	}
 	if departures == 0 || replacements == 0 {
 		t.Fatalf("%d departures, %d replacements; want some of each", departures, replacements)
+	}
+}
+
+func validDiscount(gross, discount int64) bool {
+	if discount == 0 {
+		return true
+	}
+	for _, p := range discountPercents {
+		if discount == divRoundHalfUp(gross*int64(p), 100) {
+			return true
+		}
+	}
+	return false
+}
+
+func TestBaskets(t *testing.T) {
+	ds := mustGenerate(t, Default())
+	var lines, discounted, singleUnit int
+	sizes := make([]int, len(basketWeights)+1)
+	revenue := map[string]int64{}
+	sales := map[string]int64{}
+	for _, s := range ds.Sales {
+		sizes[len(s.Lines)]++
+		tier := ds.Branches[s.Branch].Tier
+		revenue[tier] += s.TotalCents
+		sales[tier]++
+		for _, l := range s.Lines {
+			lines++
+			if l.DiscountCents > 0 {
+				discounted++
+			}
+			if l.Quantity == 1 {
+				singleUnit++
+			}
+		}
+	}
+	if pct := discounted * 100 / lines; pct < 8 || pct > 12 {
+		t.Fatalf("%d%% of lines discounted, want about 10%%", pct)
+	}
+	if pct := singleUnit * 100 / lines; pct < 85 {
+		t.Fatalf("%d%% of lines have one unit, want most", pct)
+	}
+	if !(sizes[1] > sizes[2] && sizes[2] > sizes[3] && sizes[3] > 0) {
+		t.Fatalf("basket sizes %v, want 1 > 2 > 3 > 0 lines", sizes[1:])
+	}
+	ticket := func(tier string) int64 { return revenue[tier] / sales[tier] }
+	if !(ticket("large") > ticket("medium") && ticket("medium") > ticket("small")) {
+		t.Fatalf("average ticket: large %d, medium %d, small %d", ticket("large"), ticket("medium"), ticket("small"))
 	}
 }
