@@ -3,6 +3,7 @@ package seed
 import (
 	"fmt"
 	"math/rand/v2"
+	"slices"
 	"time"
 )
 
@@ -22,7 +23,78 @@ func Generate(cfg Config) (Dataset, error) {
 	ds.Branches = generateBranches(r, cfg, start)
 	ds.Items = generateItems(r, cfg.Items)
 	ds.Employees = generateEmployees(r, cfg, ds.Branches, start)
+	loc, _ := time.LoadLocation(cfg.Timezone) // checked by Validate
+	ds.Sales = generateSales(r, cfg, loc, start, ds)
 	return ds, nil
+}
+
+// Opening hours, in seconds after local midnight.
+const (
+	opensAt  = 11 * 3600
+	closesAt = 21 * 3600
+)
+
+// generateSales walks the window day by day. Each branch gets a uniform
+// number of sales per day at uniform times within opening hours, each by a
+// uniform employee of that branch. Folios run per branch in time order.
+func generateSales(r *rand.Rand, cfg Config, loc *time.Location, start time.Time, ds Dataset) []Sale {
+	staff := make([][]int, len(ds.Branches))
+	for i, e := range ds.Employees {
+		staff[e.Branch] = append(staff[e.Branch], i)
+	}
+	folios := make([]int, len(ds.Branches))
+	end := start.AddDate(0, cfg.Months, 0)
+	var out []Sale
+	for day := start; day.Before(end); day = day.AddDate(0, 0, 1) {
+		y, m, d := day.Date()
+		for b, branch := range ds.Branches {
+			times := make([]int, cfg.MinSalesPerDay+r.IntN(cfg.MaxSalesPerDay-cfg.MinSalesPerDay+1))
+			for i := range times {
+				times[i] = opensAt + r.IntN(closesAt-opensAt)
+			}
+			slices.Sort(times)
+			for _, sec := range times {
+				folios[b]++
+				sale := Sale{
+					Folio:    fmt.Sprintf("%s-%06d", branch.Code, folios[b]),
+					Branch:   b,
+					Employee: staff[b][r.IntN(len(staff[b]))],
+					SoldAt:   time.Date(y, m, d, 0, 0, sec, 0, loc),
+					Lines:    generateLines(r, ds.Items),
+				}
+				for _, l := range sale.Lines {
+					sale.TotalCents += l.TotalCents
+				}
+				sale.SubtotalCents, sale.TaxCents = SplitTax(sale.TotalCents, ivaBP)
+				out = append(out, sale)
+			}
+		}
+	}
+	return out
+}
+
+// generateLines picks 1 to 3 distinct items, one unit each, at list price.
+func generateLines(r *rand.Rand, items []Item) []SaleLine {
+	n := min(1+r.IntN(3), len(items))
+	picked := make([]int, 0, n)
+	for len(picked) < n {
+		if i := r.IntN(len(items)); !slices.Contains(picked, i) {
+			picked = append(picked, i)
+		}
+	}
+	lines := make([]SaleLine, n)
+	for i, item := range picked {
+		it := items[item]
+		lines[i] = SaleLine{
+			LineNo:         i + 1,
+			Item:           item,
+			Quantity:       1,
+			UnitPriceCents: it.ListPriceCents,
+			UnitCostCents:  it.UnitCostCents,
+			TotalCents:     it.ListPriceCents,
+		}
+	}
+	return lines
 }
 
 func generateCategories() []Category {

@@ -10,6 +10,7 @@ type Dataset struct {
 	Categories []Category
 	Items      []Item
 	Employees  []Employee
+	Sales      []Sale
 }
 
 type Branch struct {
@@ -42,4 +43,27 @@ type Employee struct {
 	FullName string
 	Role     string // "seller" or "manager"
 	HiredOn  time.Time
+}
+
+// Sale times are in the branch's zone. TotalCents includes tax.
+type Sale struct {
+	Folio         string
+	Branch        int // index into Dataset.Branches
+	Employee      int // index into Dataset.Employees
+	SoldAt        time.Time
+	SubtotalCents int64
+	TaxCents      int64
+	TotalCents    int64
+	Lines         []SaleLine
+}
+
+// SaleLine copies the item's price and cost at the moment of sale.
+type SaleLine struct {
+	LineNo         int
+	Item           int // index into Dataset.Items
+	Quantity       int
+	UnitPriceCents int64
+	UnitCostCents  int64
+	DiscountCents  int64
+	TotalCents     int64
 }

@@ -144,6 +144,104 @@ func TestGenerateCatalog(t *testing.T) {
 	}
 }
 
+func TestGenerateSales(t *testing.T) {
+	oneItem := smallConfig()
+	oneItem.Items = 1
+	fixedVolume := smallConfig()
+	fixedVolume.MinSalesPerDay, fixedVolume.MaxSalesPerDay = 2, 2
+	tests := []struct {
+		name string
+		cfg  Config
+	}{
+		{"small", smallConfig()},
+		{"one item", oneItem},
+		{"fixed volume", fixedVolume},
+		{"default", Default()},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := tt.cfg
+			ds := mustGenerate(t, cfg)
+			loc, _ := time.LoadLocation(cfg.Timezone)
+			first := time.Date(cfg.Start.Year(), cfg.Start.Month(), cfg.Start.Day(), 0, 0, 0, 0, loc)
+			end := first.AddDate(0, cfg.Months, 0)
+			days := 0
+			for d := first; d.Before(end); d = d.AddDate(0, 0, 1) {
+				days++
+			}
+
+			perBranchDay := map[string]int{}
+			folios := map[string]bool{}
+			lastAt := make([]time.Time, len(ds.Branches))
+			lastFolio := make([]string, len(ds.Branches))
+			for _, s := range ds.Sales {
+				if folios[s.Folio] {
+					t.Fatalf("duplicate folio %s", s.Folio)
+				}
+				folios[s.Folio] = true
+				if s.Branch < 0 || s.Branch >= len(ds.Branches) {
+					t.Fatalf("sale %s has branch index %d", s.Folio, s.Branch)
+				}
+				if s.Employee < 0 || s.Employee >= len(ds.Employees) || ds.Employees[s.Employee].Branch != s.Branch {
+					t.Fatalf("sale %s has employee %d from another branch", s.Folio, s.Employee)
+				}
+				if s.SoldAt.Location().String() != cfg.Timezone {
+					t.Fatalf("sale %s in zone %v", s.Folio, s.SoldAt.Location())
+				}
+				if s.SoldAt.Before(first) || !s.SoldAt.Before(end) {
+					t.Fatalf("sale %s at %v outside [%v, %v)", s.Folio, s.SoldAt, first, end)
+				}
+				if h := s.SoldAt.Hour(); h < 11 || h >= 21 {
+					t.Fatalf("sale %s at hour %d, outside 11-21", s.Folio, h)
+				}
+				if s.SoldAt.Before(lastAt[s.Branch]) || s.Folio <= lastFolio[s.Branch] {
+					t.Fatalf("sale %s at %v out of order", s.Folio, s.SoldAt)
+				}
+				lastAt[s.Branch], lastFolio[s.Branch] = s.SoldAt, s.Folio
+				perBranchDay[ds.Branches[s.Branch].Code+s.SoldAt.Format(time.DateOnly)]++
+
+				if n := len(s.Lines); n < 1 || n > 3 || n > len(ds.Items) {
+					t.Fatalf("sale %s has %d lines", s.Folio, n)
+				}
+				var sum int64
+				seen := map[int]bool{}
+				for i, l := range s.Lines {
+					if l.LineNo != i+1 {
+						t.Fatalf("sale %s line %d has line_no %d", s.Folio, i, l.LineNo)
+					}
+					if l.Item < 0 || l.Item >= len(ds.Items) || seen[l.Item] {
+						t.Fatalf("sale %s line %d has item %d (invalid or repeated)", s.Folio, l.LineNo, l.Item)
+					}
+					seen[l.Item] = true
+					it := ds.Items[l.Item]
+					if l.Quantity < 1 || l.UnitPriceCents != it.ListPriceCents || l.UnitCostCents != it.UnitCostCents || l.DiscountCents != 0 {
+						t.Fatalf("sale %s line %+v does not match item %+v", s.Folio, l, it)
+					}
+					if l.TotalCents != int64(l.Quantity)*l.UnitPriceCents-l.DiscountCents {
+						t.Fatalf("sale %s line %d total %d", s.Folio, l.LineNo, l.TotalCents)
+					}
+					sum += l.TotalCents
+				}
+				if s.TotalCents != sum {
+					t.Fatalf("sale %s total %d, lines add to %d", s.Folio, s.TotalCents, sum)
+				}
+				if sub, tax := SplitTax(sum, ivaBP); s.SubtotalCents != sub || s.TaxCents != tax {
+					t.Fatalf("sale %s subtotal %d tax %d, want %d %d", s.Folio, s.SubtotalCents, s.TaxCents, sub, tax)
+				}
+			}
+			for key, n := range perBranchDay {
+				if n < cfg.MinSalesPerDay || n > cfg.MaxSalesPerDay {
+					t.Fatalf("%s has %d sales, want %d-%d", key, n, cfg.MinSalesPerDay, cfg.MaxSalesPerDay)
+				}
+			}
+			lo, hi := days*cfg.Branches*cfg.MinSalesPerDay, days*cfg.Branches*cfg.MaxSalesPerDay
+			if len(ds.Sales) < lo || len(ds.Sales) > hi {
+				t.Fatalf("sales = %d, want %d-%d", len(ds.Sales), lo, hi)
+			}
+		})
+	}
+}
+
 func TestItemPriceRanges(t *testing.T) {
 	ds := mustGenerate(t, Default())
 	for _, it := range ds.Items {
