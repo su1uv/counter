@@ -25,8 +25,8 @@ type Config struct {
 	Branches           int
 	Items              int
 	EmployeesPerBranch int
-	MinSalesPerDay     int // per branch
-	MaxSalesPerDay     int // per branch
+	MinSalesPerDay     int // per branch, before calendar effects
+	MaxSalesPerDay     int // per branch, before calendar effects
 }
 
 // Default returns the full-size configuration: 15 branches and six whole

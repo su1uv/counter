@@ -242,16 +242,57 @@ func TestGenerateSales(t *testing.T) {
 					t.Fatalf("sale %s subtotal %d tax %d, want %d %d", s.Folio, s.SubtotalCents, s.TaxCents, sub, tax)
 				}
 			}
-			for key, n := range perBranchDay {
-				if n < cfg.MinSalesPerDay || n > cfg.MaxSalesPerDay {
-					t.Fatalf("%s has %d sales, want %d-%d", key, n, cfg.MinSalesPerDay, cfg.MaxSalesPerDay)
+			if days == 0 || len(ds.Sales) == 0 {
+				t.Fatalf("%d days, %d sales", days, len(ds.Sales))
+			}
+			for d := first; d.Before(end); d = d.AddDate(0, 0, 1) {
+				pct := dayPercent(d)
+				lo := (cfg.MinSalesPerDay*pct*85 + 5000) / 10000
+				hi := (cfg.MaxSalesPerDay*pct*115 + 5000) / 10000
+				for _, b := range ds.Branches {
+					key := b.Code + d.Format(time.DateOnly)
+					if n := perBranchDay[key]; n < lo || n > hi {
+						t.Fatalf("%s has %d sales, want %d-%d", key, n, lo, hi)
+					}
 				}
 			}
-			lo, hi := days*cfg.Branches*cfg.MinSalesPerDay, days*cfg.Branches*cfg.MaxSalesPerDay
-			if len(ds.Sales) < lo || len(ds.Sales) > hi {
-				t.Fatalf("sales = %d, want %d-%d", len(ds.Sales), lo, hi)
-			}
 		})
+	}
+}
+
+func TestSalesCalendarShape(t *testing.T) {
+	ds := mustGenerate(t, Default())
+	byWeekday := map[time.Weekday]int{}
+	byDate := map[string]int{}
+	byHour := map[int]int{}
+	for _, s := range ds.Sales {
+		byWeekday[s.SoldAt.Weekday()]++
+		byDate[s.SoldAt.Format(time.DateOnly)]++
+		byHour[s.SoldAt.Hour()]++
+	}
+	for wd := time.Sunday; wd <= time.Saturday; wd++ {
+		if wd != time.Saturday && byWeekday[wd] >= byWeekday[time.Saturday] {
+			t.Fatalf("%v has %d sales, Saturday %d", wd, byWeekday[wd], byWeekday[time.Saturday])
+		}
+		if wd != time.Monday && byWeekday[wd] <= byWeekday[time.Monday] {
+			t.Fatalf("%v has %d sales, Monday %d", wd, byWeekday[wd], byWeekday[time.Monday])
+		}
+	}
+	busiest := ""
+	for date, n := range byDate {
+		if busiest == "" || n > byDate[busiest] {
+			busiest = date
+		}
+	}
+	if busiest != "2026-05-10" {
+		t.Fatalf("busiest day is %s, want Mother's Day 2026-05-10", busiest)
+	}
+	// Both Tuesdays: a payday and the plain Tuesday a week earlier.
+	if byDate["2026-06-30"] <= byDate["2026-06-23"] {
+		t.Fatalf("payday has %d sales, plain Tuesday %d", byDate["2026-06-30"], byDate["2026-06-23"])
+	}
+	if byHour[18] <= byHour[11] {
+		t.Fatalf("18:00 has %d sales, 11:00 %d", byHour[18], byHour[11])
 	}
 }
 

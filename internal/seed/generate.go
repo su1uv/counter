@@ -28,29 +28,25 @@ func Generate(cfg Config) (Dataset, error) {
 	return ds, nil
 }
 
-// Opening hours, in seconds after local midnight.
-const (
-	opensAt  = 11 * 3600
-	closesAt = 21 * 3600
-)
-
-// generateSales walks the window day by day. Each branch gets a uniform
-// number of sales per day at uniform times within opening hours, each by a
-// uniform employee of that branch. Folios run per branch in time order.
+// generateSales walks the window day by day. Each branch's daily count
+// follows the calendar (see dailySales) and sale times follow the hourly
+// curve. Each sale is by a uniform employee of that branch. Folios run per
+// branch in time order.
 func generateSales(r *rand.Rand, cfg Config, loc *time.Location, start time.Time, ds Dataset) []Sale {
 	staff := make([][]int, len(ds.Branches))
 	for i, e := range ds.Employees {
 		staff[e.Branch] = append(staff[e.Branch], i)
 	}
+	base := (cfg.MinSalesPerDay + cfg.MaxSalesPerDay + 1) / 2
 	folios := make([]int, len(ds.Branches))
 	end := start.AddDate(0, cfg.Months, 0)
 	var out []Sale
 	for day := start; day.Before(end); day = day.AddDate(0, 0, 1) {
 		y, m, d := day.Date()
 		for b, branch := range ds.Branches {
-			times := make([]int, cfg.MinSalesPerDay+r.IntN(cfg.MaxSalesPerDay-cfg.MinSalesPerDay+1))
+			times := make([]int, dailySales(r, base, day))
 			for i := range times {
-				times[i] = opensAt + r.IntN(closesAt-opensAt)
+				times[i] = saleSecond(r)
 			}
 			slices.Sort(times)
 			for _, sec := range times {
