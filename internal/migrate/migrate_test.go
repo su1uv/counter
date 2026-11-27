@@ -37,35 +37,50 @@ func tableExists(t *testing.T, db *sql.DB, name string) bool {
 	return exists
 }
 
+// downAll reverts every applied migration; "down" reverts one at a time.
+func downAll(ctx context.Context, db *sql.DB) {
+	for Run(ctx, db, migrationsDir, "down", &bytes.Buffer{}) == nil {
+	}
+}
+
+var retailTables = []string{"branches", "categories", "items", "employees", "sales", "sale_lines"}
+
 func TestRunLifecycle(t *testing.T) {
 	db := openTestDB(t)
 	ctx := context.Background()
 	var out bytes.Buffer
 
 	steps := []struct {
-		command     string
-		wantOut     string
-		wantTable   bool
-		checkTables bool
+		command    string
+		wantOut    []string
+		wantProbe  bool
+		wantRetail bool
 	}{
-		{"up", "00001_schema_probe.sql", true, true},
-		{"status", "00001_schema_probe.sql", true, true},
-		{"down", "00001_schema_probe.sql", false, true},
-		{"up", "00001_schema_probe.sql", true, true},
+		{"up", []string{"00001_schema_probe.sql", "00002_retail_core.sql"}, true, true},
+		{"status", []string{"00001_schema_probe.sql", "00002_retail_core.sql"}, true, true},
+		{"down", []string{"00002_retail_core.sql"}, true, false},
+		{"down", []string{"00001_schema_probe.sql"}, false, false},
+		{"up", []string{"00001_schema_probe.sql", "00002_retail_core.sql"}, true, true},
 	}
-	reset := func() { _ = Run(ctx, db, migrationsDir, "down", &bytes.Buffer{}) }
-	reset()
-	t.Cleanup(reset)
+	downAll(ctx, db)
+	t.Cleanup(func() { downAll(ctx, db) })
 	for _, s := range steps {
 		out.Reset()
 		if err := Run(ctx, db, migrationsDir, s.command, &out); err != nil {
 			t.Fatalf("%s: %v", s.command, err)
 		}
-		if !strings.Contains(out.String(), s.wantOut) {
-			t.Fatalf("%s output %q lacks %q", s.command, out.String(), s.wantOut)
+		for _, want := range s.wantOut {
+			if !strings.Contains(out.String(), want) {
+				t.Fatalf("%s output %q lacks %q", s.command, out.String(), want)
+			}
 		}
-		if got := tableExists(t, db, "schema_probe"); got != s.wantTable {
-			t.Fatalf("after %s: schema_probe exists = %v, want %v", s.command, got, s.wantTable)
+		if got := tableExists(t, db, "schema_probe"); got != s.wantProbe {
+			t.Fatalf("after %s: schema_probe exists = %v, want %v", s.command, got, s.wantProbe)
+		}
+		for _, table := range retailTables {
+			if got := tableExists(t, db, table); got != s.wantRetail {
+				t.Fatalf("after %s: %s exists = %v, want %v", s.command, table, got, s.wantRetail)
+			}
 		}
 	}
 }

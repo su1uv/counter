@@ -4,6 +4,69 @@
 
 package store
 
+import (
+	"time"
+)
+
+type Branch struct {
+	ID       int64
+	Code     string
+	Name     string
+	City     string
+	State    string
+	Timezone string
+	OpenedOn time.Time
+}
+
+type Category struct {
+	ID   int64
+	Code string
+	Name string
+}
+
+type Employee struct {
+	ID       int64
+	Code     string
+	BranchID int64
+	FullName string
+	Role     string
+	HiredOn  time.Time
+}
+
+type Item struct {
+	ID             int64
+	Sku            string
+	CategoryID     int64
+	Name           string
+	Material       string
+	UnitCostCents  int64
+	ListPriceCents int64
+	Active         bool
+}
+
+type Sale struct {
+	ID            int64
+	Folio         string
+	BranchID      int64
+	EmployeeID    int64
+	SoldAt        time.Time
+	SubtotalCents int64
+	TaxCents      int64
+	TotalCents    int64
+}
+
+type SaleLine struct {
+	ID             int64
+	SaleID         int64
+	LineNo         int32
+	ItemID         int64
+	Quantity       int32
+	UnitPriceCents int64
+	UnitCostCents  int64
+	DiscountCents  int64
+	TotalCents     int64
+}
+
 type SchemaProbe struct {
 	ID int64
 }
