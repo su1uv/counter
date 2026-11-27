@@ -32,7 +32,7 @@ curl localhost:8080/readyz    # readiness, pings the database
 
 ## Seed data
 
-`make seed` fills the database with synthetic data for "Joyería Aurora", a fictional jewelry chain: 15 branches, 8 categories, 300 items, 60 employees, and sales with lines from 2026-05-01 to 2026-10-31. Money is MXN in integer centavos, and shelf prices include 16% IVA. Data values are in Spanish.
+`make seed` fills the database with synthetic data for "Joyería Aurora", a fictional jewelry chain: 15 branches, 8 categories, 300 items, employees, and sales with lines, payments and returns from 2026-05-01 to 2026-10-31. Money is MXN in integer centavos, and shelf prices include 16% IVA. Data values are in Spanish.
 
 ```bash
 make migrate-up                  # seed never migrates
@@ -41,7 +41,16 @@ make seed SEED_FLAGS=-reset      # truncates the seed tables, then seeds
 make seed SEED=7 SEED_FLAGS=-reset
 ```
 
-Seeding is deterministic: the same `SEED` (default 1), code, and Go version produce the same rows and the same ids. The window is fixed, not relative to today. With `SEED=1` a full run inserts 82,392 sales and 164,903 sale lines in about 12 seconds on a laptop against the Compose Postgres. The `seed` command is separate from the service; the service binary does not import it.
+Seeding is deterministic: the same `SEED` (default 1), code, and Go version produce the same rows and the same ids. The window is fixed, not relative to today. With `SEED=1` a full run inserts 78 employees, 82,226 sales, 113,561 sale lines, 85,494 payments and 1,990 returns in about 14 seconds on a laptop against the Compose Postgres. The `seed` command is separate from the service; the service binary does not import it.
+
+The sales follow patterns an agent can find in SQL:
+
+- **Calendar.** Saturday is the busiest day and Monday the quietest. Stores open 11:00–21:00, busiest around 18:00. Paydays (the 15th and the last day of the month) sell 30% more, and Mother's Day (May 10) is the busiest day of the window.
+- **Branch tiers.** `branches.tier` is `large` (3 branches, including Centro), `medium` (7) or `small` (5). Large branches have more traffic, more staff, and sell more gold and watches, so their average ticket is higher.
+- **Staff.** Each branch has one manager and 2–5 sellers. Some sellers sell more than others, each has a weekly day off, and a few leave during the window (`employees.terminated_on`, the last day worked) and are replaced.
+- **Baskets.** Most sales have one line and one unit. About 10% of lines get 5–20% off, recorded in `sale_lines.discount_cents`.
+- **Payments.** `sale_payments` is about 60% card, 30% cash and 10% bank transfer. About 5% of sales are split across two methods. Payments of a completed sale add up to its total.
+- **Cancellations and returns.** About 1% of sales have `sales.status = 'cancelled'`; they keep their lines but have no payments. About 2% of lines come back within 30 days in `sale_returns` and `sale_return_lines`, which point to the original sale line. Filter on `status = 'completed'` for revenue.
 
 ## Deploy order
 
