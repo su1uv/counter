@@ -31,6 +31,7 @@ func Generate(cfg Config) (Dataset, error) {
 	ds.Suppliers = generateSuppliers()
 	newSimulation(r, cfg, loc, start, &ds, base, mix, policies).run(start)
 	ds.Customers = generateCustomers(r, cfg.Branches)
+	ds.Invoices = generateInvoices(r, ds.Sales, ds.Customers)
 	return ds, nil
 }
 

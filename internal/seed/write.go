@@ -209,11 +209,22 @@ func insert(ctx context.Context, q *store.Queries, ds Dataset) error {
 		}
 	}
 
-	for _, c := range ds.Customers {
-		if _, err := q.InsertCustomer(ctx, store.InsertCustomerParams{
+	customerIDs := make([]int64, len(ds.Customers))
+	for i, c := range ds.Customers {
+		id, err := q.InsertCustomer(ctx, store.InsertCustomerParams{
 			Code: c.Code, Rfc: c.RFC, LegalName: c.LegalName, TaxRegime: c.TaxRegime, PostalCode: c.PostalCode,
-		}); err != nil {
+		})
+		if err != nil {
 			return fmt.Errorf("insert customer %s: %w", c.Code, err)
+		}
+		customerIDs[i] = id
+	}
+	for _, inv := range ds.Invoices {
+		if _, err := q.InsertInvoice(ctx, store.InsertInvoiceParams{
+			SaleID: saleIDs[inv.Sale], CustomerID: customerIDs[inv.Customer], Uuid: inv.UUID,
+			CfdiUse: inv.CfdiUse, PaymentForm: inv.PaymentForm, PaymentMethod: inv.PaymentMethod, IssuedAt: inv.IssuedAt,
+		}); err != nil {
+			return fmt.Errorf("insert invoice %s: %w", inv.UUID, err)
 		}
 	}
 	return nil

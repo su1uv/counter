@@ -19,6 +19,7 @@ type Dataset struct {
 	Movements      []Movement
 	CashMovements  []CashMovement
 	Customers      []Customer
+	Invoices       []Invoice
 }
 
 // Customer is a CFDI receptor. RFC is a fictional Mexican tax id. The first
@@ -29,6 +30,19 @@ type Customer struct {
 	LegalName  string
 	TaxRegime  string // "601", "612" or "616"
 	PostalCode string
+}
+
+// Invoice is CFDI metadata for one completed sale. Nothing is stamped and
+// nothing is sent to the SAT. PaymentMethod is PUE: the sale was paid in
+// full at the counter.
+type Invoice struct {
+	Sale          int // index into Dataset.Sales
+	Customer      int // index into Dataset.Customers
+	UUID          string
+	CfdiUse       string // SAT c_UsoCFDI
+	PaymentForm   string // SAT c_FormaPago
+	PaymentMethod string
+	IssuedAt      time.Time
 }
 
 type Supplier struct {

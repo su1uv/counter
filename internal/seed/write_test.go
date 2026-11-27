@@ -63,7 +63,8 @@ func fingerprint(t *testing.T, db *sql.DB) string {
 		(SELECT md5(string_agg(t::text, '|' ORDER BY id)) FROM cash_registers t),
 		(SELECT md5(string_agg(t::text, '|' ORDER BY id)) FROM register_shifts t),
 		(SELECT md5(string_agg(t::text, '|' ORDER BY id)) FROM cash_movements t),
-		(SELECT md5(string_agg(t::text, '|' ORDER BY id)) FROM customers t))`).Scan(&fp)
+		(SELECT md5(string_agg(t::text, '|' ORDER BY id)) FROM customers t),
+		(SELECT md5(string_agg(t::text, '|' ORDER BY id)) FROM invoices t))`).Scan(&fp)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -145,9 +146,10 @@ func TestWrite(t *testing.T) {
 		RegisterShifts:     int64(len(ds.Shifts)),
 		CashMovements:      int64(len(ds.CashMovements)),
 		Customers:          int64(len(ds.Customers)),
+		Invoices:           int64(len(ds.Invoices)),
 	}
-	if want.SaleReturns == 0 || want.RegisterShifts == 0 || want.Customers == 0 {
-		t.Fatal("small dataset has no returns, shifts or customers to write")
+	if want.SaleReturns == 0 || want.RegisterShifts == 0 || want.Customers == 0 || want.Invoices == 0 {
+		t.Fatal("small dataset has no returns, shifts, customers or invoices to write")
 	}
 	if got != want {
 		t.Fatalf("CountSeedRows = %+v, want %+v", got, want)
@@ -252,6 +254,25 @@ func TestWrite(t *testing.T) {
 			(tax_regime = '616' AND rfc <> 'XAXX010101000')
 			OR (tax_regime = '612' AND length(rfc) <> 13)
 			OR (tax_regime = '601' AND length(rfc) <> 12)`},
+		{"invoice matches its completed sale", `SELECT count(*) FROM invoices i
+			JOIN sales s ON s.id = i.sale_id
+			WHERE s.status <> 'completed' OR i.issued_at <> s.sold_at OR i.payment_method <> 'PUE'`},
+		{"cancelled sales have no invoice", `SELECT count(*) FROM sales s
+			WHERE s.status = 'cancelled' AND EXISTS (SELECT 1 FROM invoices i WHERE i.sale_id = s.id)`},
+		{"cfdi use follows the receptor regime", `SELECT count(*) FROM invoices i
+			JOIN customers c ON c.id = i.customer_id
+			WHERE (c.tax_regime = '616' AND i.cfdi_use <> 'S01')
+			OR (c.tax_regime = '601' AND i.cfdi_use <> 'G01')
+			OR (c.tax_regime = '612' AND i.cfdi_use <> 'G03')`},
+		{"payment form follows the largest tender", `SELECT count(*) FROM invoices i
+			JOIN LATERAL (
+				SELECT method FROM sale_payments p WHERE p.sale_id = i.sale_id
+				ORDER BY amount_cents DESC, id LIMIT 1
+			) pay ON true
+			WHERE i.payment_form <> CASE pay.method WHEN 'cash' THEN '01' WHEN 'transfer' THEN '03' ELSE '04' END`},
+		{"invoices go to general and named receptors", `SELECT count(*) FROM (SELECT 1) x
+			WHERE NOT EXISTS (SELECT 1 FROM invoices i JOIN customers c ON c.id = i.customer_id WHERE c.rfc = 'XAXX010101000')
+			OR NOT EXISTS (SELECT 1 FROM invoices i JOIN customers c ON c.id = i.customer_id WHERE c.rfc <> 'XAXX010101000')`},
 	})
 
 	first := fingerprint(t, db)
@@ -301,6 +322,7 @@ func TestWriteErrors(t *testing.T) {
 		{"shift", func(ds *Dataset) { ds.Shifts[0].ClosedAt = ds.Shifts[0].OpenedAt }},
 		{"cash movement", func(ds *Dataset) { ds.CashMovements[0].Kind = "theft" }},
 		{"customer", func(ds *Dataset) { ds.Customers[1].Code = ds.Customers[0].Code }},
+		{"invoice", func(ds *Dataset) { ds.Invoices[0].PaymentMethod = "PPD" }},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
