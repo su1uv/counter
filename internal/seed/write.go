@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"time"
 
 	"github.com/su1uv/counter/internal/store"
 )
@@ -68,12 +69,37 @@ func insert(ctx context.Context, q *store.Queries, ds Dataset) error {
 		employeeIDs[i] = id
 	}
 
+	registerIDs := make([]int64, len(ds.Registers))
+	for i, reg := range ds.Registers {
+		id, err := q.InsertCashRegister(ctx, store.InsertCashRegisterParams{
+			BranchID: branchIDs[reg.Branch], Code: reg.Code, Name: reg.Name,
+		})
+		if err != nil {
+			return fmt.Errorf("insert register %s: %w", reg.Code, err)
+		}
+		registerIDs[i] = id
+	}
+
+	shiftIDs := make([]int64, len(ds.Shifts))
+	for i, sh := range ds.Shifts {
+		id, err := q.InsertRegisterShift(ctx, store.InsertRegisterShiftParams{
+			RegisterID: registerIDs[sh.Register], OpenedBy: employeeIDs[sh.OpenedBy],
+			OpenedAt: sh.OpenedAt, ClosedAt: sh.ClosedAt, OpeningFloatCents: sh.OpeningFloatCents,
+			ExpectedCashCents: sh.ExpectedCashCents, CountedCashCents: sh.CountedCashCents,
+		})
+		if err != nil {
+			return fmt.Errorf("insert shift of %s at %s: %w", ds.Registers[sh.Register].Code, sh.OpenedAt.Format(time.RFC3339), err)
+		}
+		shiftIDs[i] = id
+	}
+
 	saleIDs := make([]int64, len(ds.Sales))
 	lineIDs := make([][]int64, len(ds.Sales))
 	for i, s := range ds.Sales {
 		saleID, err := q.InsertSale(ctx, store.InsertSaleParams{
 			Folio: s.Folio, BranchID: branchIDs[s.Branch], EmployeeID: employeeIDs[s.Employee], SoldAt: s.SoldAt,
 			Status: s.Status, SubtotalCents: s.SubtotalCents, TaxCents: s.TaxCents, TotalCents: s.TotalCents,
+			ShiftID: sql.NullInt64{Int64: shiftIDs[s.Shift], Valid: len(shiftIDs) > 0},
 		})
 		if err != nil {
 			return fmt.Errorf("insert sale %s: %w", s.Folio, err)
@@ -172,6 +198,14 @@ func insert(ctx context.Context, q *store.Queries, ds Dataset) error {
 		}
 		if _, err := q.InsertInventoryMovement(ctx, p); err != nil {
 			return fmt.Errorf("insert %s movement %s: %w", m.Kind, m.Reference, err)
+		}
+	}
+
+	for _, m := range ds.CashMovements {
+		if _, err := q.InsertCashMovement(ctx, store.InsertCashMovementParams{
+			ShiftID: shiftIDs[m.Shift], MovedAt: m.MovedAt, Kind: m.Kind, AmountCents: m.AmountCents, Note: m.Note,
+		}); err != nil {
+			return fmt.Errorf("insert %s from shift %d: %w", m.Kind, m.Shift, err)
 		}
 	}
 	return nil

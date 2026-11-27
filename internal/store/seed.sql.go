@@ -25,7 +25,10 @@ SELECT
     (SELECT count(*) FROM suppliers) AS suppliers,
     (SELECT count(*) FROM purchase_orders) AS purchase_orders,
     (SELECT count(*) FROM purchase_order_lines) AS purchase_order_lines,
-    (SELECT count(*) FROM inventory_movements) AS inventory_movements
+    (SELECT count(*) FROM inventory_movements) AS inventory_movements,
+    (SELECT count(*) FROM cash_registers) AS cash_registers,
+    (SELECT count(*) FROM register_shifts) AS register_shifts,
+    (SELECT count(*) FROM cash_movements) AS cash_movements
 `
 
 type CountSeedRowsRow struct {
@@ -42,6 +45,9 @@ type CountSeedRowsRow struct {
 	PurchaseOrders     int64
 	PurchaseOrderLines int64
 	InventoryMovements int64
+	CashRegisters      int64
+	RegisterShifts     int64
+	CashMovements      int64
 }
 
 func (q *Queries) CountSeedRows(ctx context.Context) (CountSeedRowsRow, error) {
@@ -61,6 +67,9 @@ func (q *Queries) CountSeedRows(ctx context.Context) (CountSeedRowsRow, error) {
 		&i.PurchaseOrders,
 		&i.PurchaseOrderLines,
 		&i.InventoryMovements,
+		&i.CashRegisters,
+		&i.RegisterShifts,
+		&i.CashMovements,
 	)
 	return i, err
 }
@@ -108,6 +117,52 @@ func (q *Queries) InsertBranch(ctx context.Context, arg InsertBranchParams) (int
 		arg.OpenedOn,
 		arg.Tier,
 	)
+	var id int64
+	err := row.Scan(&id)
+	return id, err
+}
+
+const insertCashMovement = `-- name: InsertCashMovement :one
+INSERT INTO cash_movements (shift_id, moved_at, kind, amount_cents, note)
+VALUES ($1, $2, $3, $4, $5)
+RETURNING id
+`
+
+type InsertCashMovementParams struct {
+	ShiftID     int64
+	MovedAt     time.Time
+	Kind        string
+	AmountCents int64
+	Note        string
+}
+
+func (q *Queries) InsertCashMovement(ctx context.Context, arg InsertCashMovementParams) (int64, error) {
+	row := q.db.QueryRowContext(ctx, insertCashMovement,
+		arg.ShiftID,
+		arg.MovedAt,
+		arg.Kind,
+		arg.AmountCents,
+		arg.Note,
+	)
+	var id int64
+	err := row.Scan(&id)
+	return id, err
+}
+
+const insertCashRegister = `-- name: InsertCashRegister :one
+INSERT INTO cash_registers (branch_id, code, name)
+VALUES ($1, $2, $3)
+RETURNING id
+`
+
+type InsertCashRegisterParams struct {
+	BranchID int64
+	Code     string
+	Name     string
+}
+
+func (q *Queries) InsertCashRegister(ctx context.Context, arg InsertCashRegisterParams) (int64, error) {
+	row := q.db.QueryRowContext(ctx, insertCashRegister, arg.BranchID, arg.Code, arg.Name)
 	var id int64
 	err := row.Scan(&id)
 	return id, err
@@ -287,9 +342,43 @@ func (q *Queries) InsertPurchaseOrderLine(ctx context.Context, arg InsertPurchas
 	return id, err
 }
 
+const insertRegisterShift = `-- name: InsertRegisterShift :one
+INSERT INTO register_shifts (
+    register_id, opened_by, opened_at, closed_at,
+    opening_float_cents, expected_cash_cents, counted_cash_cents
+)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
+RETURNING id
+`
+
+type InsertRegisterShiftParams struct {
+	RegisterID        int64
+	OpenedBy          int64
+	OpenedAt          time.Time
+	ClosedAt          time.Time
+	OpeningFloatCents int64
+	ExpectedCashCents int64
+	CountedCashCents  int64
+}
+
+func (q *Queries) InsertRegisterShift(ctx context.Context, arg InsertRegisterShiftParams) (int64, error) {
+	row := q.db.QueryRowContext(ctx, insertRegisterShift,
+		arg.RegisterID,
+		arg.OpenedBy,
+		arg.OpenedAt,
+		arg.ClosedAt,
+		arg.OpeningFloatCents,
+		arg.ExpectedCashCents,
+		arg.CountedCashCents,
+	)
+	var id int64
+	err := row.Scan(&id)
+	return id, err
+}
+
 const insertSale = `-- name: InsertSale :one
-INSERT INTO sales (folio, branch_id, employee_id, sold_at, status, subtotal_cents, tax_cents, total_cents)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+INSERT INTO sales (folio, branch_id, employee_id, sold_at, status, subtotal_cents, tax_cents, total_cents, shift_id)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 RETURNING id
 `
 
@@ -302,6 +391,7 @@ type InsertSaleParams struct {
 	SubtotalCents int64
 	TaxCents      int64
 	TotalCents    int64
+	ShiftID       sql.NullInt64
 }
 
 func (q *Queries) InsertSale(ctx context.Context, arg InsertSaleParams) (int64, error) {
@@ -314,6 +404,7 @@ func (q *Queries) InsertSale(ctx context.Context, arg InsertSaleParams) (int64, 
 		arg.SubtotalCents,
 		arg.TaxCents,
 		arg.TotalCents,
+		arg.ShiftID,
 	)
 	var id int64
 	err := row.Scan(&id)
@@ -467,7 +558,8 @@ func (q *Queries) InsertSupplier(ctx context.Context, arg InsertSupplierParams) 
 }
 
 const resetSeedData = `-- name: ResetSeedData :exec
-TRUNCATE inventory_movements, purchase_order_lines, purchase_orders, suppliers,
+TRUNCATE cash_movements, register_shifts, cash_registers,
+    inventory_movements, purchase_order_lines, purchase_orders, suppliers,
     sale_return_lines, sale_returns, sale_payments,
     sale_lines, sales, employees, items, categories, branches RESTART IDENTITY
 `

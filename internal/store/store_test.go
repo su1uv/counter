@@ -82,9 +82,45 @@ func TestSeedQueries(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	registerID, err := q.InsertCashRegister(ctx, store.InsertCashRegisterParams{
+		BranchID: branchID, Code: "S01-C1", Name: "Caja 1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := q.InsertCashRegister(ctx, store.InsertCashRegisterParams{
+		BranchID: branchID, Code: "S01-C1", Name: "Caja 1",
+	}); err == nil {
+		t.Fatal("second register with the same code succeeded, want a unique violation")
+	}
+	opened := day.Add(11 * time.Hour)
+	shiftID, err := q.InsertRegisterShift(ctx, store.InsertRegisterShiftParams{
+		RegisterID: registerID, OpenedBy: employeeID, OpenedAt: opened, ClosedAt: opened.Add(10 * time.Hour),
+		OpeningFloatCents: 300000, ExpectedCashCents: 250000, CountedCashCents: 248000,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rejectedShifts := []struct {
+		name string
+		p    store.InsertRegisterShiftParams
+	}{
+		{"closes when it opens", store.InsertRegisterShiftParams{
+			RegisterID: registerID, OpenedBy: employeeID, OpenedAt: opened, ClosedAt: opened,
+			OpeningFloatCents: 300000, ExpectedCashCents: 0, CountedCashCents: 0}},
+		{"negative float", store.InsertRegisterShiftParams{
+			RegisterID: registerID, OpenedBy: employeeID, OpenedAt: opened, ClosedAt: opened.Add(time.Hour),
+			OpeningFloatCents: -1, ExpectedCashCents: 0, CountedCashCents: 0}},
+	}
+	for _, r := range rejectedShifts {
+		if _, err := q.InsertRegisterShift(ctx, r.p); err == nil {
+			t.Fatalf("InsertRegisterShift(%s) succeeded, want a check violation", r.name)
+		}
+	}
 	saleID, err := q.InsertSale(ctx, store.InsertSaleParams{
 		Folio: "S01-000001", BranchID: branchID, EmployeeID: employeeID, SoldAt: day.Add(12 * time.Hour),
 		Status: "completed", SubtotalCents: 862069, TaxCents: 137931, TotalCents: 1000000,
+		ShiftID: sql.NullInt64{Int64: shiftID, Valid: true},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -226,6 +262,24 @@ func TestSeedQueries(t *testing.T) {
 		}
 	}
 
+	rejectedCash := []struct {
+		name string
+		p    store.InsertCashMovementParams
+	}{
+		{"zero amount", store.InsertCashMovementParams{ShiftID: shiftID, MovedAt: opened.Add(time.Hour), Kind: "expense", Note: "Gasto menor"}},
+		{"unknown kind", store.InsertCashMovementParams{ShiftID: shiftID, MovedAt: opened.Add(time.Hour), Kind: "deposit", AmountCents: 100, Note: "Fondo"}},
+	}
+	for _, r := range rejectedCash {
+		if _, err := q.InsertCashMovement(ctx, r.p); err == nil {
+			t.Fatalf("InsertCashMovement(%s) succeeded, want a check violation", r.name)
+		}
+	}
+	if _, err := q.InsertCashMovement(ctx, store.InsertCashMovementParams{
+		ShiftID: shiftID, MovedAt: opened.Add(8 * time.Hour), Kind: "withdrawal", AmountCents: 50000, Note: "Retiro a caja fuerte",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
 	got, err := q.CountSeedRows(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -234,6 +288,7 @@ func TestSeedQueries(t *testing.T) {
 		Branches: 1, Categories: 1, Items: 1, Employees: 1, Sales: 1, SaleLines: 1,
 		SalePayments: 2, SaleReturns: 1, SaleReturnLines: 1,
 		Suppliers: 1, PurchaseOrders: 1, PurchaseOrderLines: 1, InventoryMovements: int64(len(movements)),
+		CashRegisters: 1, RegisterShifts: 1, CashMovements: 1,
 	}
 	if got != want {
 		t.Fatalf("CountSeedRows = %+v, want %+v", got, want)

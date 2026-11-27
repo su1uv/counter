@@ -95,8 +95,9 @@ func run(ctx context.Context, base seed.Config, args []string, getenv func(strin
 		lines += len(s.Lines)
 		payments += len(s.Payments)
 	}
-	fmt.Fprintf(stdout, "seeded %d branches, %d categories, %d items, %d employees, %d sales, %d sale lines, %d payments, %d returns, %d purchase orders, %d inventory movements with seed %d in %s\n",
-		len(ds.Branches), len(ds.Categories), len(ds.Items), len(ds.Employees), len(ds.Sales), lines, payments, len(ds.Returns),
-		len(ds.PurchaseOrders), len(ds.Movements), cfg.Seed, time.Since(began).Round(time.Millisecond))
+	fmt.Fprintf(stdout, "seeded %d branches, %d categories, %d items, %d employees, %d cash registers, %d shifts, %d sales, %d sale lines, %d payments, %d returns, %d purchase orders, %d inventory movements, %d cash movements with seed %d in %s\n",
+		len(ds.Branches), len(ds.Categories), len(ds.Items), len(ds.Employees), len(ds.Registers), len(ds.Shifts),
+		len(ds.Sales), lines, payments, len(ds.Returns), len(ds.PurchaseOrders), len(ds.Movements), len(ds.CashMovements),
+		cfg.Seed, time.Since(began).Round(time.Millisecond))
 	return nil
 }

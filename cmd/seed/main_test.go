@@ -110,7 +110,7 @@ func TestRunAgainstDatabase(t *testing.T) {
 	}{
 		{"first seed", nil, "", "seeded 2 branches"},
 		{"refuses non-empty tables", nil, "-reset", ""},
-		{"reset", []string{"-reset"}, "", "inventory movements"},
+		{"reset", []string{"-reset"}, "", "cash movements"},
 		{"reset again", []string{"-reset"}, "", "purchase orders"},
 		{"reset with another seed", []string{"-reset", "-seed", "7"}, "", "with seed 7"},
 	}

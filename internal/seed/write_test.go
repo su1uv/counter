@@ -59,7 +59,10 @@ func fingerprint(t *testing.T, db *sql.DB) string {
 		(SELECT md5(string_agg(t::text, '|' ORDER BY id)) FROM suppliers t),
 		(SELECT md5(string_agg(t::text, '|' ORDER BY id)) FROM purchase_orders t),
 		(SELECT md5(string_agg(t::text, '|' ORDER BY id)) FROM purchase_order_lines t),
-		(SELECT md5(string_agg(t::text, '|' ORDER BY id)) FROM inventory_movements t))`).Scan(&fp)
+		(SELECT md5(string_agg(t::text, '|' ORDER BY id)) FROM inventory_movements t),
+		(SELECT md5(string_agg(t::text, '|' ORDER BY id)) FROM cash_registers t),
+		(SELECT md5(string_agg(t::text, '|' ORDER BY id)) FROM register_shifts t),
+		(SELECT md5(string_agg(t::text, '|' ORDER BY id)) FROM cash_movements t))`).Scan(&fp)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -137,9 +140,12 @@ func TestWrite(t *testing.T) {
 		PurchaseOrders:     int64(len(ds.PurchaseOrders)),
 		PurchaseOrderLines: countOrderLines(ds),
 		InventoryMovements: int64(len(ds.Movements)),
+		CashRegisters:      int64(len(ds.Registers)),
+		RegisterShifts:     int64(len(ds.Shifts)),
+		CashMovements:      int64(len(ds.CashMovements)),
 	}
-	if want.SaleReturns == 0 {
-		t.Fatal("small dataset has no returns to write")
+	if want.SaleReturns == 0 || want.RegisterShifts == 0 {
+		t.Fatal("small dataset has no returns or shifts to write")
 	}
 	if got != want {
 		t.Fatalf("CountSeedRows = %+v, want %+v", got, want)
@@ -204,6 +210,40 @@ func TestWrite(t *testing.T) {
 			OR count(DISTINCT m.item_id) <> 1 OR count(DISTINCT b.city) <> 1) x`},
 		{"count adjustments are shrinkage", `SELECT count(*) FROM inventory_movements
 			WHERE kind = 'adjustment' AND quantity >= 0`},
+		{"every sale has a shift", `SELECT count(*) FROM sales WHERE shift_id IS NULL`},
+		{"sale is inside its shift at the same branch", `SELECT count(*) FROM sales s
+			JOIN register_shifts sh ON sh.id = s.shift_id
+			JOIN cash_registers r ON r.id = sh.register_id
+			WHERE s.sold_at < sh.opened_at OR s.sold_at >= sh.closed_at OR s.branch_id <> r.branch_id`},
+		{"one register per branch", `SELECT count(*) FROM branches b
+			WHERE (SELECT count(*) FROM cash_registers r WHERE r.branch_id = b.id) <> 1`},
+		{"shift opener works at the register's branch", `SELECT count(*) FROM register_shifts sh
+			JOIN cash_registers r ON r.id = sh.register_id
+			JOIN employees e ON e.id = sh.opened_by
+			WHERE e.branch_id <> r.branch_id`},
+		{"expected cash equals the shift's cash flows", `SELECT count(*) FROM register_shifts sh
+			JOIN cash_registers reg ON reg.id = sh.register_id
+			WHERE sh.expected_cash_cents <> sh.opening_float_cents
+			+ coalesce((SELECT sum(p.amount_cents) FROM sale_payments p
+				JOIN sales s ON s.id = p.sale_id
+				WHERE s.shift_id = sh.id AND s.status = 'completed' AND p.method = 'cash'), 0)
+			- coalesce((SELECT sum((2 * ret.total_cents * cash.cash_cents + s.total_cents) / (2 * s.total_cents))
+				FROM sale_returns ret
+				JOIN sales s ON s.id = ret.sale_id
+				JOIN LATERAL (SELECT coalesce(sum(p.amount_cents), 0) AS cash_cents
+					FROM sale_payments p WHERE p.sale_id = s.id AND p.method = 'cash') cash ON true
+				WHERE s.branch_id = reg.branch_id
+				AND ret.returned_at >= sh.opened_at AND ret.returned_at < sh.closed_at
+				AND cash.cash_cents > 0 AND s.total_cents > 0), 0)
+			- coalesce((SELECT sum(m.amount_cents) FROM cash_movements m WHERE m.shift_id = sh.id), 0)`},
+		{"counted cash is within 200 pesos of expected", `SELECT count(*) FROM register_shifts
+			WHERE abs(counted_cash_cents - expected_cash_cents) > 20000`},
+		{"most shifts count exact", `SELECT count(*) FROM (
+			SELECT count(*) FILTER (WHERE counted_cash_cents = expected_cash_cents) AS exact, count(*) AS n
+			FROM register_shifts) x WHERE exact * 2 <= n`},
+		{"cash movement is inside its shift", `SELECT count(*) FROM cash_movements m
+			JOIN register_shifts sh ON sh.id = m.shift_id
+			WHERE m.moved_at < sh.opened_at OR m.moved_at >= sh.closed_at`},
 	})
 
 	first := fingerprint(t, db)
@@ -249,6 +289,9 @@ func TestWriteErrors(t *testing.T) {
 			ds.PurchaseOrders[0].Lines = append(ds.PurchaseOrders[0].Lines, ds.PurchaseOrders[0].Lines[0])
 		}},
 		{"opening movement", func(ds *Dataset) { ds.Movements[0].Quantity = -1 }},
+		{"register", func(ds *Dataset) { ds.Registers[1].Code = ds.Registers[0].Code }},
+		{"shift", func(ds *Dataset) { ds.Shifts[0].ClosedAt = ds.Shifts[0].OpenedAt }},
+		{"cash movement", func(ds *Dataset) { ds.CashMovements[0].Kind = "theft" }},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

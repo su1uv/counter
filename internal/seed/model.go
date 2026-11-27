@@ -10,11 +10,14 @@ type Dataset struct {
 	Categories     []Category
 	Items          []Item
 	Employees      []Employee
+	Registers      []Register
+	Shifts         []Shift
 	Sales          []Sale
 	Returns        []Return
 	Suppliers      []Supplier
 	PurchaseOrders []PurchaseOrder
 	Movements      []Movement
+	CashMovements  []CashMovement
 }
 
 type Supplier struct {
@@ -98,12 +101,44 @@ type Employee struct {
 	DayOff time.Weekday
 }
 
+// Register is one cash register at a branch.
+type Register struct {
+	Code   string
+	Branch int // index into Dataset.Branches
+	Name   string
+}
+
+// Shift is one opening of a register, in the branch's zone. Expected cash
+// is the drawer balance the count should match. Counted cash is that
+// balance plus a small over or short; both can be negative when cash
+// refunds exceed the drawer.
+type Shift struct {
+	Register          int // index into Dataset.Registers
+	OpenedBy          int // index into Dataset.Employees
+	OpenedAt          time.Time
+	ClosedAt          time.Time
+	OpeningFloatCents int64
+	ExpectedCashCents int64
+	CountedCashCents  int64
+}
+
+// CashMovement is cash that left the drawer during a shift: a withdrawal
+// to the safe, or a petty expense. AmountCents is positive.
+type CashMovement struct {
+	Shift       int // index into Dataset.Shifts
+	MovedAt     time.Time
+	Kind        string // "withdrawal" or "expense"
+	AmountCents int64
+	Note        string
+}
+
 // Sale times are in the branch's zone. TotalCents includes tax. Cancelled
 // sales have no payments.
 type Sale struct {
 	Folio         string
 	Branch        int // index into Dataset.Branches
 	Employee      int // index into Dataset.Employees
+	Shift         int // index into Dataset.Shifts
 	SoldAt        time.Time
 	Status        string // "completed" or "cancelled"
 	SubtotalCents int64

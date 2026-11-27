@@ -32,7 +32,7 @@ curl localhost:8080/readyz    # readiness, pings the database
 
 ## Seed data
 
-`make seed` fills the database with synthetic data for "Joyería Aurora", a fictional jewelry chain: 15 branches, 8 categories, 300 items, employees, sales with lines, payments and returns, and the inventory behind them (suppliers, purchase orders and a stock ledger) from 2026-05-01 to 2026-10-31. Money is MXN in integer centavos, and shelf prices include 16% IVA. Data values are in Spanish.
+`make seed` fills the database with synthetic data for "Joyería Aurora", a fictional jewelry chain: 15 branches, 8 categories, 300 items, employees, sales with lines, payments and returns, the inventory behind them (suppliers, purchase orders and a stock ledger), and cash-register shifts from 2026-05-01 to 2026-10-31. Money is MXN in integer centavos, and shelf prices include 16% IVA. Data values are in Spanish.
 
 ```bash
 make migrate-up                  # seed never migrates
@@ -41,7 +41,7 @@ make seed SEED_FLAGS=-reset      # truncates the seed tables, then seeds
 make seed SEED=7 SEED_FLAGS=-reset
 ```
 
-Seeding is deterministic: the same `SEED` (default 1), code, and Go version produce the same rows and the same ids. The window is fixed, not relative to today. With `SEED=1` a full run inserts 78 employees, 82,013 sales, 112,878 sale lines, 85,237 payments, 2,023 returns, 9,491 purchase orders and 160,017 inventory movements in about 27 seconds on a laptop against the Compose Postgres. The `seed` command is separate from the service; the service binary does not import it.
+Seeding is deterministic: the same `SEED` (default 1), code, and Go version produce the same rows and the same ids. The window is fixed, not relative to today. With `SEED=1` a full run inserts 78 employees, 82,013 sales, 112,878 sale lines, 85,237 payments, 2,023 returns, 9,491 purchase orders, 160,017 inventory movements, 15 cash registers, 3,615 shifts and 3,959 cash movements in about 29 seconds on a laptop against the Compose Postgres. The `seed` command is separate from the service; the service binary does not import it.
 
 The sales follow patterns an agent can find in SQL:
 
@@ -60,6 +60,14 @@ Inventory follows the sales. The simulation runs day by day and branch by branch
 - **Purchasing.** Suppliers deliver directly to branches: `PR01` silver, `PR02` gold 10k and 14k, `PR03` gold 18k, and `PR04` watches. After closing, each branch orders every item at or below its reorder point, up to its maximum, with one `purchase_orders` row per supplier. Orders arrive in full at 10:00, after the supplier's `lead_time_days` plus 0–2 days. Orders that would arrive after the window stay `ordered`.
 - **Transfers.** When a branch sells out of an item, a branch in the same city with spare stock above its own reorder point sends some that night. The units arrive the next morning. Both rows share a `TR-` reference.
 - **Counts.** On the last day of each month, each branch counts its stock. A few items come up one unit short and are recorded as `adjustment` rows of −1 with a `CONTEO-` reference. That is shrinkage, about 140 units chain-wide.
+
+The cash register is the corte de caja a point-of-sale system would export:
+
+- **Registers.** Each branch has one row in `cash_registers`, code `S01-C1` and name Caja 1.
+- **Shifts.** `register_shifts` covers the open hours. A quiet day is one shift, 11:00–21:00. A day at least as busy as a Friday, including Mother's Day and a payday that reaches that level, splits at 16:00 into a morning shift and an evening shift. The manager opens; on a split day a seller takes the evening when one is on duty. The drawer starts with a float of 3,000 MXN. Every sale, cancelled ones included, sets `sales.shift_id`, and `sold_at` falls inside that shift.
+- **Expected cash.** It equals the float, plus cash payments rung on the shift, minus the cash share of refunds paid while the shift was open, minus withdrawals and expenses. A return refunds cash in the same proportion as the original sale was paid in cash, on the shift open at `returned_at`, which can be a later day. Card and transfer refunds do not touch the drawer. A cash refund larger than the drawer leaves the expected balance negative.
+- **Movements.** `cash_movements` is cash that left the drawer. On Monday, a shift that can cover it records a petty expense of 150 MXN (`Gasto menor`) an hour after opening. When the drawer is at least 1,000 MXN above the float, the excess goes to the safe in multiples of 100 MXN (`Retiro a caja fuerte`), 30 minutes before closing.
+- **Count.** `counted_cash_cents` is the expected balance plus a small over or short. Four shifts in five count exact. Every fifth shift is off by a non-zero whole-peso amount of at most 200 MXN.
 
 ## Deploy order
 

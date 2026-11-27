@@ -23,6 +23,7 @@ func Generate(cfg Config) (Dataset, error) {
 	ds.Branches = generateBranches(r, cfg, start)
 	ds.Items = generateItems(r, cfg.Items)
 	ds.Employees = generateEmployees(r, cfg, ds.Branches, start)
+	ds.Registers = generateRegisters(ds.Branches)
 	loc, _ := time.LoadLocation(cfg.Timezone) // checked by Validate
 	base, mix := branchDemand(r, cfg, ds.Branches, ds.Items)
 	policies := stockPolicies(base, mix)
