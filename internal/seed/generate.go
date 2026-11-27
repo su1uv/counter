@@ -60,6 +60,7 @@ func generateSales(r *rand.Rand, cfg Config, loc *time.Location, start time.Time
 					Branch:   b,
 					Employee: staff[b][r.IntN(len(staff[b]))],
 					SoldAt:   time.Date(y, m, d, 0, 0, sec, 0, loc),
+					Status:   "completed",
 					Lines:    generateLines(r, ds.Items),
 				}
 				for _, l := range sale.Lines {
@@ -117,6 +118,7 @@ func generateBranches(r *rand.Rand, cfg Config, start time.Time) []Branch {
 			State:    s.State,
 			Timezone: cfg.Timezone,
 			OpenedOn: start.AddDate(0, 0, -(365 + r.IntN(14*365))),
+			Tier:     s.Tier,
 		}
 	}
 	return out

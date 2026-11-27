@@ -52,7 +52,10 @@ func fingerprint(t *testing.T, db *sql.DB) string {
 		(SELECT md5(string_agg(t::text, '|' ORDER BY id)) FROM items t),
 		(SELECT md5(string_agg(t::text, '|' ORDER BY id)) FROM employees t),
 		(SELECT md5(string_agg(t::text, '|' ORDER BY id)) FROM sales t),
-		(SELECT md5(string_agg(t::text, '|' ORDER BY id)) FROM sale_lines t))`).Scan(&fp)
+		(SELECT md5(string_agg(t::text, '|' ORDER BY id)) FROM sale_lines t),
+		(SELECT md5(string_agg(t::text, '|' ORDER BY id)) FROM sale_payments t),
+		(SELECT md5(string_agg(t::text, '|' ORDER BY id)) FROM sale_returns t),
+		(SELECT md5(string_agg(t::text, '|' ORDER BY id)) FROM sale_return_lines t))`).Scan(&fp)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -20,6 +20,7 @@ type Branch struct {
 	State    string
 	Timezone string
 	OpenedOn time.Time
+	Tier     string // "large", "medium" or "small"
 }
 
 type Category struct {
@@ -43,6 +44,8 @@ type Employee struct {
 	FullName string
 	Role     string // "seller" or "manager"
 	HiredOn  time.Time
+	// TerminatedOn is the last day worked; zero while still employed.
+	TerminatedOn time.Time
 }
 
 // Sale times are in the branch's zone. TotalCents includes tax.
@@ -51,6 +54,7 @@ type Sale struct {
 	Branch        int // index into Dataset.Branches
 	Employee      int // index into Dataset.Employees
 	SoldAt        time.Time
+	Status        string // "completed" or "cancelled"
 	SubtotalCents int64
 	TaxCents      int64
 	TotalCents    int64

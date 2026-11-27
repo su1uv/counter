@@ -4,25 +4,27 @@ package seed
 // into these slices, so reordering them changes every seeded dataset.
 
 type site struct {
-	Name, City, State string
+	Name, City, State, Tier string
 }
 
+// branchSites has 3 large, 7 medium and 5 small branches. The first three
+// cover every tier, so small test configs still compare tiers.
 var branchSites = []site{
-	{"Centro", "Ciudad de México", "CDMX"},
-	{"Polanco", "Ciudad de México", "CDMX"},
-	{"Coyoacán", "Ciudad de México", "CDMX"},
-	{"Santa Fe", "Ciudad de México", "CDMX"},
-	{"Del Valle", "Ciudad de México", "CDMX"},
-	{"Chapultepec", "Guadalajara", "Jalisco"},
-	{"Providencia", "Guadalajara", "Jalisco"},
-	{"Americana", "Guadalajara", "Jalisco"},
-	{"San Pedro", "Monterrey", "Nuevo León"},
-	{"Cumbres", "Monterrey", "Nuevo León"},
-	{"Valle Oriente", "Monterrey", "Nuevo León"},
-	{"Angelópolis", "Puebla", "Puebla"},
-	{"La Paz", "Puebla", "Puebla"},
-	{"Juriquilla", "Querétaro", "Querétaro"},
-	{"Centro Sur", "Querétaro", "Querétaro"},
+	{"Centro", "Ciudad de México", "CDMX", "large"},
+	{"Polanco", "Ciudad de México", "CDMX", "medium"},
+	{"Coyoacán", "Ciudad de México", "CDMX", "small"},
+	{"Santa Fe", "Ciudad de México", "CDMX", "large"},
+	{"Del Valle", "Ciudad de México", "CDMX", "medium"},
+	{"Chapultepec", "Guadalajara", "Jalisco", "medium"},
+	{"Providencia", "Guadalajara", "Jalisco", "small"},
+	{"Americana", "Guadalajara", "Jalisco", "medium"},
+	{"San Pedro", "Monterrey", "Nuevo León", "large"},
+	{"Cumbres", "Monterrey", "Nuevo León", "small"},
+	{"Valle Oriente", "Monterrey", "Nuevo León", "medium"},
+	{"Angelópolis", "Puebla", "Puebla", "medium"},
+	{"La Paz", "Puebla", "Puebla", "small"},
+	{"Juriquilla", "Querétaro", "Querétaro", "medium"},
+	{"Centro Sur", "Querétaro", "Querétaro", "small"},
 }
 
 // categoryDef prices in whole pesos; zero means use the material's range.

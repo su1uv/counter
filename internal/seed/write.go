@@ -27,7 +27,7 @@ func insert(ctx context.Context, q *store.Queries, ds Dataset) error {
 	for i, b := range ds.Branches {
 		id, err := q.InsertBranch(ctx, store.InsertBranchParams{
 			Code: b.Code, Name: b.Name, City: b.City, State: b.State,
-			Timezone: b.Timezone, OpenedOn: b.OpenedOn,
+			Timezone: b.Timezone, OpenedOn: b.OpenedOn, Tier: b.Tier,
 		})
 		if err != nil {
 			return fmt.Errorf("insert branch %s: %w", b.Code, err)
@@ -60,6 +60,7 @@ func insert(ctx context.Context, q *store.Queries, ds Dataset) error {
 	for i, e := range ds.Employees {
 		id, err := q.InsertEmployee(ctx, store.InsertEmployeeParams{
 			Code: e.Code, BranchID: branchIDs[e.Branch], FullName: e.FullName, Role: e.Role, HiredOn: e.HiredOn,
+			TerminatedOn: sql.NullTime{Time: e.TerminatedOn, Valid: !e.TerminatedOn.IsZero()},
 		})
 		if err != nil {
 			return fmt.Errorf("insert employee %s: %w", e.Code, err)
@@ -70,7 +71,7 @@ func insert(ctx context.Context, q *store.Queries, ds Dataset) error {
 	for _, s := range ds.Sales {
 		saleID, err := q.InsertSale(ctx, store.InsertSaleParams{
 			Folio: s.Folio, BranchID: branchIDs[s.Branch], EmployeeID: employeeIDs[s.Employee], SoldAt: s.SoldAt,
-			SubtotalCents: s.SubtotalCents, TaxCents: s.TaxCents, TotalCents: s.TotalCents,
+			Status: s.Status, SubtotalCents: s.SubtotalCents, TaxCents: s.TaxCents, TotalCents: s.TotalCents,
 		})
 		if err != nil {
 			return fmt.Errorf("insert sale %s: %w", s.Folio, err)

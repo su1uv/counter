@@ -33,6 +33,16 @@ func TestWordLists(t *testing.T) {
 	if branchSites[0].Name != "Centro" {
 		t.Fatalf("first branch is %q, want Centro", branchSites[0].Name)
 	}
+	tiers := map[string]int{}
+	for _, s := range branchSites {
+		tiers[s.Tier]++
+	}
+	if want := map[string]int{"large": 3, "medium": 7, "small": 5}; !reflect.DeepEqual(tiers, want) {
+		t.Fatalf("tiers = %v, want %v", tiers, want)
+	}
+	if first := []string{branchSites[0].Tier, branchSites[1].Tier, branchSites[2].Tier}; !reflect.DeepEqual(first, []string{"large", "medium", "small"}) {
+		t.Fatalf("first three tiers = %v, want large, medium, small", first)
+	}
 	for _, c := range categoryDefs {
 		if len(c.Styles) == 0 {
 			t.Fatalf("category %s has no styles", c.Code)
@@ -86,7 +96,7 @@ func TestGenerateCatalog(t *testing.T) {
 
 			for _, b := range ds.Branches {
 				unique("branch", b.Code)
-				if b.Timezone != cfg.Timezone || b.Name == "" || b.City == "" || b.State == "" {
+				if b.Timezone != cfg.Timezone || b.Name == "" || b.City == "" || b.State == "" || b.Tier == "" {
 					t.Fatalf("incomplete branch %+v", b)
 				}
 				if !b.OpenedOn.Before(start) {
@@ -184,6 +194,9 @@ func TestGenerateSales(t *testing.T) {
 				}
 				if s.Employee < 0 || s.Employee >= len(ds.Employees) || ds.Employees[s.Employee].Branch != s.Branch {
 					t.Fatalf("sale %s has employee %d from another branch", s.Folio, s.Employee)
+				}
+				if s.Status != "completed" {
+					t.Fatalf("sale %s has status %q", s.Folio, s.Status)
 				}
 				if s.SoldAt.Location().String() != cfg.Timezone {
 					t.Fatalf("sale %s in zone %v", s.Folio, s.SoldAt.Location())
